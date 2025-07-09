@@ -7,7 +7,14 @@ import Foundation
 protocol ServiceError: LocalizedError {
     var serviceName: String { get }
     var errorCode: String { get }
-    var recoverySuggestion: String? { get }
+    var recoverySuggestionText: String? { get }
+}
+
+extension ServiceError {
+    // Provide default implementation for LocalizedError
+    var recoverySuggestion: String? {
+        recoverySuggestionText
+    }
 }
 
 // MARK: - AI Service Errors
@@ -49,7 +56,7 @@ enum AIServiceError: ServiceError {
         }
     }
     
-    var recoverySuggestion: String? {
+    var recoverySuggestionText: String? {
         switch self {
         case .invalidImageData:
             return "Ensure the image data is in a supported format (JPEG, PNG, HEIF)"
@@ -110,7 +117,7 @@ enum ImageServiceError: ServiceError {
         }
     }
     
-    var recoverySuggestion: String? {
+    var recoverySuggestionText: String? {
         switch self {
         case .invalidImageData, .corruptedData:
             return "Check the source image file and try again"
@@ -169,7 +176,7 @@ enum SpatialServiceError: ServiceError {
         }
     }
     
-    var recoverySuggestion: String? {
+    var recoverySuggestionText: String? {
         switch self {
         case .missingImageData:
             return "Ensure both front and back images are available"
@@ -236,7 +243,7 @@ enum ImportServiceError: ServiceError {
         }
     }
     
-    var recoverySuggestion: String? {
+    var recoverySuggestionText: String? {
         switch self {
         case .cardNotFound:
             return "Verify the card ID exists in the database"
@@ -295,7 +302,7 @@ enum RepositoryError: ServiceError {
         }
     }
     
-    var recoverySuggestion: String? {
+    var recoverySuggestionText: String? {
         switch self {
         case .contextUnavailable:
             return "Restart the app to reinitialize the data context"
@@ -316,7 +323,7 @@ extension ServiceError {
     var fullDescription: String {
         var description = "[\(errorCode)] \(serviceName): \(errorDescription ?? "Unknown error")"
         
-        if let recovery = recoverySuggestion {
+        if let recovery = recoverySuggestionText {
             description += "\n\nSuggestion: \(recovery)"
         }
         

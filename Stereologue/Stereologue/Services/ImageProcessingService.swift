@@ -155,24 +155,3 @@ struct CropData {
     let x0, y0, x1, y1: Float
     let score: Float
 }
-
-// MARK: - Error Types
-enum ImageServiceError: LocalizedError {
-    case invalidImageData
-    case conversionFailed
-    case enhancementFailed
-    case processingTimeout
-    
-    var errorDescription: String? {
-        switch self {
-        case .invalidImageData:
-            return "Invalid image data"
-        case .conversionFailed:
-            return "Failed to convert image"
-        case .enhancementFailed:
-            return "Image enhancement failed"
-        case .processingTimeout:
-            return "Image processing timed out"
-        }
-    }
-}

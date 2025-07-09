@@ -71,8 +71,8 @@ final class AIAnalysisService {
                 }
                 
                 let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                let text = observations.compactMap { 
-                    try? $0.topCandidates(1).first?.string 
+                let text = observations.compactMap {
+                    try? $0.topCandidates(1).first?.string
                 }
                 
                 continuation.resume(returning: text)
@@ -109,23 +109,5 @@ final class AIAnalysisService {
     private func generateTags(from scenes: [String], objects: [String]) -> [String] {
         // Generate smart tags based on detected content
         return scenes + objects
-    }
-}
-
-// MARK: - Error Types
-enum AIServiceError: LocalizedError {
-    case invalidImageData
-    case analysisTimeout
-    case modelLoadFailed
-    
-    var errorDescription: String? {
-        switch self {
-        case .invalidImageData:
-            return "Invalid image data provided"
-        case .analysisTimeout:
-            return "AI analysis timed out"
-        case .modelLoadFailed:
-            return "Failed to load AI model"
-        }
     }
 }

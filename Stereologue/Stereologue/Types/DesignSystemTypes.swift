@@ -116,7 +116,13 @@ enum TypographyStyle {
 
 // MARK: - Color Extensions
 extension Color {
-    static let cardDefault = Color("CardDefault", bundle: nil) ?? Color(.systemBackground)
+    static let cardDefault: Color = {
+        #if os(macOS)
+        Color(NSColor.windowBackgroundColor)
+        #else
+        Color(UIColor.systemBackground)
+        #endif
+    }()
     
     var adaptiveVariant: Color {
         // Create adaptive color variants based on environment

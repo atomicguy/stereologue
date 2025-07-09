@@ -61,7 +61,7 @@ final class ImportService {
 struct StereoCardImportData: Codable {
     let uuid: String
     let titles: [String]
-    let subjects: [String] 
+    let subjects: [String]
     let authors: [String]
     let dates: [String]
     let imageIds: ImageIdentifiers
@@ -175,22 +175,5 @@ private extension ImportService {
     
     func updateCard(_ card: CardSchemaV1.StereoCard, with data: StereoCardImportData, context: ModelContext) async throws {
         // Implementation for updating existing card
-    }
-}
-
-enum ImportServiceError: LocalizedError {
-    case cardNotFound(String)
-    case invalidData
-    case processingFailed(Error)
-    
-    var errorDescription: String? {
-        switch self {
-        case .cardNotFound(let id):
-            return "Card with ID \(id) not found"
-        case .invalidData:
-            return "Invalid import data format"
-        case .processingFailed(let error):
-            return "Processing failed: \(error.localizedDescription)"
-        }
     }
 }

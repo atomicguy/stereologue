@@ -132,27 +132,6 @@ final class SpatialPhotoService {
     }
 }
 
-// MARK: - Error Types
-enum SpatialServiceError: LocalizedError {
-    case missingImageData
-    case spatialConversionFailed
-    case invalidFormat
-    case optimizationFailed
-    
-    var errorDescription: String? {
-        switch self {
-        case .missingImageData:
-            return "Missing required image data for spatial conversion"
-        case .spatialConversionFailed:
-            return "Failed to create spatial photo"
-        case .invalidFormat:
-            return "Invalid spatial photo format"
-        case .optimizationFailed:
-            return "Failed to optimize spatial photo"
-        }
-    }
-}
-
 #else
 
 // Placeholder for non-visionOS platforms
@@ -175,17 +154,6 @@ final class SpatialPhotoService {
     
     func optimizeForSpatialViewing(_ spatialData: Data) async throws -> Data {
         throw SpatialServiceError.unsupportedPlatform
-    }
-}
-
-enum SpatialServiceError: LocalizedError {
-    case unsupportedPlatform
-    
-    var errorDescription: String? {
-        switch self {
-        case .unsupportedPlatform:
-            return "Spatial photos are only supported on visionOS"
-        }
     }
 }
 

@@ -9,7 +9,7 @@ import SwiftUI
 @Observable
 final class CardRepository {
     private let modelContext: ModelContext
-    private let aiService: AIAnalysisService
+    private let aiService: AIAnalysisService?
     private let imageService: ImageProcessingService
     private let importService: ImportService
     
@@ -26,7 +26,7 @@ final class CardRepository {
         self.modelContext = modelContext
         
         // Initialize services (these will be dependency injected in real app)
-        self.aiService = AIAnalysisService()
+        self.aiService = try? AIAnalysisService()
         self.imageService = ImageProcessingService()
         self.importService = ImportService()
         
@@ -40,10 +40,14 @@ final class CardRepository {
     /// Complete AI analysis and enhancement workflow
     func enhanceCard(_ card: CardSchemaV1.StereoCard) async {
         guard !isProcessing else { return }
+        guard let aiService = aiService else {
+            lastError = RepositoryError.contextUnavailable
+            return
+        }
         
         isProcessing = true
         processingProgress = 0
-        defer { 
+        defer {
             isProcessing = false
             processingProgress = 0
         }
@@ -78,10 +82,14 @@ final class CardRepository {
     /// Batch process multiple cards with coordinated updates
     func batchEnhanceCards(_ cards: [CardSchemaV1.StereoCard]) async {
         guard !isProcessing else { return }
+        guard let aiService = aiService else {
+            lastError = RepositoryError.contextUnavailable
+            return
+        }
         
         isProcessing = true
         processingProgress = 0
-        defer { 
+        defer {
             isProcessing = false
             processingProgress = 0
         }
@@ -138,7 +146,7 @@ final class CardRepository {
                 
                 // Add cards to collection
                 for card in cards {
-                    collection.addCard(card, context: modelContext)
+                    await collection.addCard(card, context: modelContext)
                 }
             }
             
@@ -152,7 +160,7 @@ final class CardRepository {
     
     /// Import workflow with automatic enhancement
     func importAndEnhance(data: Data, type: ImportType) async -> ImportResult {
-        guard !isProcessing else { 
+        guard !isProcessing else {
             return ImportResult(imported: 0, updated: 0, errors: [])
         }
         
@@ -211,7 +219,7 @@ final class CardRepository {
             let allCards = try modelContext.fetch(FetchDescriptor<CardSchemaV1.StereoCard>())
             
             return allCards.filter { otherCard in
-                otherCard.uuid != card.uuid && 
+                otherCard.uuid != card.uuid &&
                 haveSimilarContent(card, otherCard)
             }
         } catch {
