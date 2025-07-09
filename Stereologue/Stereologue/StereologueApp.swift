@@ -14,7 +14,6 @@ struct StereologueApp: App {
     
     init() {
         do {
-            // Initialize SwiftData container with all schemas
             container = try ModelContainer(for:
                 CardSchemaV1.StereoCard.self,
                 TitleSchemaV1.Title.self,
@@ -33,19 +32,7 @@ struct StereologueApp: App {
         WindowGroup {
             ContentView()
                 .modelContainer(container)
-                .cardRepository(CardRepository(modelContext: container.mainContext))
+                .environment(\.cardRepository, CardRepository(modelContext: container.mainContext))
         }
-        
-        #if os(macOS)
-        Settings {
-            SettingsView()
-        }
-        #endif
-        
-        #if os(visionOS)
-        ImmersiveSpace(id: "SpatialCardView") {
-            SpatialCardEnvironment()
-        }
-        #endif
     }
 }

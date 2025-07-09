@@ -85,7 +85,7 @@ enum ImportOperation {
 struct StereoCardImportData: Codable {
     let uuid: String
     let titles: [String]
-    let subjects: [String] 
+    let subjects: [String]
     let authors: [String]
     let dates: [String]
     let imageIds: ImageIdentifiers
@@ -128,134 +128,8 @@ struct CropUpdateDetails: Codable {
         case classification = "class"
     }
     
-    // Convert classification to side for our model
+    // Provide side string for model usage
     var side: String {
         classification
-    }
-}
-
-// MARK: - Batch Import
-struct BatchImportRequest {
-    let data: Data
-    let type: ImportType
-    let options: ImportOptions
-}
-
-struct ImportOptions {
-    let skipDuplicates: Bool
-    let updateExisting: Bool
-    let validateImages: Bool
-    let generateThumbnails: Bool
-    let runAIAnalysis: Bool
-    
-    static let `default` = ImportOptions(
-        skipDuplicates: true,
-        updateExisting: false,
-        validateImages: true,
-        generateThumbnails: true,
-        runAIAnalysis: false
-    )
-    
-    static let comprehensive = ImportOptions(
-        skipDuplicates: false,
-        updateExisting: true,
-        validateImages: true,
-        generateThumbnails: true,
-        runAIAnalysis: true
-    )
-}
-
-// MARK: - Progress Tracking
-struct ImportProgress {
-    let phase: ImportPhase
-    let currentItem: Int
-    let totalItems: Int
-    let processingCardId: String?
-    
-    var percentage: Double {
-        guard totalItems > 0 else { return 0 }
-        return Double(currentItem) / Double(totalItems)
-    }
-    
-    var description: String {
-        let progress = "\(currentItem)/\(totalItems)"
-        
-        switch phase {
-        case .parsing:
-            return "Parsing import data... (\(progress))"
-        case .validating:
-            return "Validating cards... (\(progress))"
-        case .importing:
-            if let cardId = processingCardId {
-                return "Importing \(cardId)... (\(progress))"
-            }
-            return "Importing cards... (\(progress))"
-        case .enhancing:
-            return "Enhancing with AI... (\(progress))"
-        case .finalizing:
-            return "Finalizing import... (\(progress))"
-        case .completed:
-            return "Import completed (\(progress))"
-        }
-    }
-}
-
-enum ImportPhase {
-    case parsing
-    case validating
-    case importing
-    case enhancing
-    case finalizing
-    case completed
-}
-
-// MARK: - Validation
-struct ImportValidation {
-    let isValid: Bool
-    let warnings: [ValidationWarning]
-    let errors: [ValidationError]
-    
-    var canProceed: Bool {
-        isValid && errors.isEmpty
-    }
-}
-
-struct ValidationWarning {
-    let cardId: String
-    let message: String
-    let field: String?
-}
-
-struct ValidationError {
-    let cardId: String
-    let message: String
-    let field: String
-    let severity: ValidationSeverity
-}
-
-enum ValidationSeverity {
-    case warning
-    case error
-    case critical
-}
-
-// MARK: - Import Statistics
-struct ImportStatistics {
-    let startTime: Date
-    let endTime: Date?
-    let totalCards: Int
-    let successfulImports: Int
-    let failedImports: Int
-    let dataSize: Int
-    let processingTime: TimeInterval?
-    
-    var averageTimePerCard: TimeInterval? {
-        guard let processingTime = processingTime, successfulImports > 0 else { return nil }
-        return processingTime / Double(successfulImports)
-    }
-    
-    var successRate: Double {
-        guard totalCards > 0 else { return 0 }
-        return Double(successfulImports) / Double(totalCards)
     }
 }

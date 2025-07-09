@@ -11,7 +11,6 @@ import SwiftData
 struct SidebarView: View {
     let collections: [CollectionSchemaV1.Collection]
     @Binding var searchText: String
-    @Binding var showingImport: Bool
     
     @Query private var allCards: [CardSchemaV1.StereoCard]
     @Environment(\.cardRepository) private var repository
@@ -27,111 +26,40 @@ struct SidebarView: View {
                     Text("\(allCards.count)")
                         .foregroundStyle(.secondary)
                 }
-                
-                NavigationLink {
-                    RecentCardsView()
-                } label: {
-                    Label("Recent", systemImage: "clock")
-                }
-                
-                NavigationLink {
-                    FavoritesView()
-                } label: {
-                    Label("Favorites", systemImage: "heart")
-                }
             }
             
-            Section("Collections") {
-                ForEach(collections) { collection in
-                    NavigationLink {
-                        CollectionDetailView(collection: collection)
-                    } label: {
-                        CollectionRowView(collection: collection)
+            if !collections.isEmpty {
+                Section("Collections") {
+                    ForEach(collections) { collection in
+                        NavigationLink {
+                            CollectionDetailView(collection: collection)
+                        } label: {
+                            Label(collection.name, systemImage: "folder")
+                            Spacer()
+                            Text("\(collection.cards.count)")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-            }
-            
-            Section("Smart Collections") {
-                NavigationLink {
-                    SmartCollectionView(filter: .needsProcessing)
-                } label: {
-                    Label("Needs Processing", systemImage: "gearshape")
-                }
-                
-                NavigationLink {
-                    SmartCollectionView(filter: .highQuality)
-                } label: {
-                    Label("High Quality", systemImage: "sparkles")
-                }
-                
-                #if os(visionOS)
-                NavigationLink {
-                    SmartCollectionView(filter: .spatialReady)
-                } label: {
-                    Label("Spatial Ready", systemImage: "view.3d")
-                }
-                #endif
             }
         }
         .navigationTitle("Stereologue")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Import", systemImage: "square.and.arrow.down") {
-                    showingImport = true
+                Button("Add Sample", systemImage: "plus") {
+                    addSampleCard()
                 }
             }
-            
-            #if os(visionOS)
-            ToolbarItem(placement: .secondaryAction) {
-                Button("View in Space", systemImage: "visionpro") {
-                    Task {
-                        await openSpatialExperience()
-                    }
-                }
-            }
-            #endif
         }
     }
     
-    #if os(visionOS)
-    private func openSpatialExperience() async {
-        // Open immersive space
-    }
-    #endif
-}
-
-struct CollectionRowView: View {
-    let collection: CollectionSchemaV1.Collection
-    
-    var body: some View {
-        HStack {
-            CollectionThumbnailView(collection: collection)
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(collection.name)
-                    .font(.body)
-                
-                Text("\(collection.cards.count) cards")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            
-            Spacer()
+    private func addSampleCard() {
+        guard let repository = repository else { return }
+        
+        do {
+            _ = try repository.createSampleCard()
+        } catch {
+            print("Failed to create sample card: \(error)")
         }
     }
-}
-
-#Preview {
-    NavigationSplitView {
-        SidebarView(
-            collections: [],
-            searchText: .constant(""),
-            showingImport: .constant(false)
-        )
-    } detail: {
-        Text("Detail")
-    }
-    .modelContainer(for: CardSchemaV1.StereoCard.self, inMemory: true)
 }
