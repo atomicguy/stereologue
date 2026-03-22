@@ -40,6 +40,19 @@ enum CollectionSchemaV1: VersionedSchema {
                 cards.first { $0.uuid == orderId }
             }
         }
+        
+        // OS 26: Computed properties for efficient access
+        // Note: @ComputedProperty requires the source of truth to be accessible
+        // These are regular computed properties that could be converted to @ComputedProperty
+        // if they access external sources like UserDefaults
+        
+        var cardCount: Int {
+            cards.count
+        }
+        
+        var isEmpty: Bool {
+            cards.isEmpty
+        }
         init(name: String) {
             self.id = UUID()
             self.name = name

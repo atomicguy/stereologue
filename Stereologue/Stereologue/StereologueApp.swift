@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppIntents
 
 @main
 struct StereologueApp: App {
@@ -14,6 +15,8 @@ struct StereologueApp: App {
     
     init() {
         do {
+            // OS 26: Consider using schema migration if you adopt the class hierarchy
+            // For now, keeping existing schema structure
             container = try ModelContainer(for:
                 CardSchemaV1.StereoCard.self,
                 TitleSchemaV1.Title.self,
@@ -23,6 +26,12 @@ struct StereologueApp: App {
                 CollectionSchemaV1.Collection.self,
                 CropSchemaV1.Crop.self
             )
+            
+            // OS 26: Initialize Spotlight indexing
+            Task { @MainActor in
+                let indexingService = SpotlightIndexingService(modelContext: container.mainContext)
+                await indexingService.indexAllCards()
+            }
         } catch {
             fatalError("Failed to initialize ModelContainer: \(error)")
         }
@@ -34,5 +43,12 @@ struct StereologueApp: App {
                 .modelContainer(container)
                 .environment(\.cardRepository, CardRepository(modelContext: container.mainContext))
         }
+    }
+}
+
+// OS 26: Register App Shortcuts
+extension StereologueApp {
+    static var appShortcuts: AppShortcutsProvider.Type {
+        StereologueShortcuts.self
     }
 }

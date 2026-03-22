@@ -114,6 +114,41 @@ enum CardSchemaV1: VersionedSchema {
             return url
         }
 
+        // OS 26: Helper computed properties for common queries
+        var primaryAuthor: AuthorSchemaV1.Author? {
+            authors.first
+        }
+        
+        var primarySubject: SubjectSchemaV1.Subject? {
+            subjects.first
+        }
+        
+        var primaryDate: DateSchemaV1.Date? {
+            dates.first
+        }
+        
+        var displayTitle: String {
+            titlePick?.text ?? titles.first?.text ?? "Untitled"
+        }
+        
+        // OS 26: Check if card has complete metadata
+        var hasCompleteMetadata: Bool {
+            !titles.isEmpty && !authors.isEmpty && !dates.isEmpty
+        }
+        
+        // OS 26: Check if card has any images stored
+        var hasFrontImage: Bool {
+            frontThumbnailData != nil || frontStandardData != nil
+        }
+        
+        var hasBackImage: Bool {
+            backThumbnailData != nil || backStandardData != nil
+        }
+        
+        var hasSpatialPhoto: Bool {
+            spatialPhotoData != nil
+        }
+        
         // MARK: - Initialization
         init(
             uuid: UUID,

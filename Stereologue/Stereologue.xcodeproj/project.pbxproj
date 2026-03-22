@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		5C336DE92E1C7A8800D9927D /* StackIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5C336DE82E1C7A8800D9927D /* StackIcon.icon */; };
+		5C98FCAD2EDC0E0F0080C561 /* MetadataEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C98FCAC2EDC0E0E0080C561 /* MetadataEntity.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,7 @@
 		5C336DCB2E1C49D900D9927D /* StereologueTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StereologueTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C336DD52E1C49D900D9927D /* StereologueUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StereologueUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C336DE82E1C7A8800D9927D /* StackIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = StackIcon.icon; sourceTree = "<group>"; };
+		5C98FCAC2EDC0E0E0080C561 /* MetadataEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataEntity.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -85,6 +87,7 @@
 				5C336DCE2E1C49D900D9927D /* StereologueTests */,
 				5C336DD82E1C49D900D9927D /* StereologueUITests */,
 				5C336DBD2E1C49D700D9927D /* Products */,
+				5C98FCAC2EDC0E0E0080C561 /* MetadataEntity.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -243,6 +246,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5C98FCAD2EDC0E0F0080C561 /* MetadataEntity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
