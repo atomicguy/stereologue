@@ -10,6 +10,10 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var cards: [StereoCard]
 
+    private let columns = [
+        GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
+    ]
+
     var body: some View {
         NavigationStack {
             Group {
@@ -20,26 +24,13 @@ struct ContentView: View {
                         description: Text("The catalog could not be loaded.")
                     )
                 } else {
-                    List(cards, id: \.uuid) { card in
-                        HStack(spacing: 12) {
-                            CardThumbnailView(card: card)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(card.title)
-                                    .font(.headline)
-                                    .lineLimit(2)
-                                if let creator = card.creator {
-                                    Text(creator.name)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let date = card.displayDate {
-                                    Text(date)
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 12) {
+                            ForEach(cards, id: \.uuid) { card in
+                                CardGridItemView(card: card)
                             }
                         }
+                        .padding(.horizontal)
                     }
                 }
             }
