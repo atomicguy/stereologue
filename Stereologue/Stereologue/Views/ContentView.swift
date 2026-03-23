@@ -2,49 +2,48 @@
 //  ContentView.swift
 //  Stereologue
 //
-//  Created by Adam Schuster on 7/7/25.
-//
 
 import SwiftUI
 import SwiftData
 
 struct ContentView: View {
-    @Environment(\.cardRepository) private var repository
-    @Query private var allCards: [CardSchemaV1.StereoCard]
-    @Query private var collections: [CollectionSchemaV1.Collection]
-    
-    @State private var selectedCard: CardSchemaV1.StereoCard?
-    @State private var searchText = ""
-    
+    @Environment(\.modelContext) private var modelContext
+    @Query private var cards: [StereoCard]
+
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                collections: collections,
-                searchText: $searchText
-            )
-        } content: {
-            CardGridView(
-                cards: filteredCards,
-                selectedCard: $selectedCard
-            )
-        } detail: {
-            if let selectedCard = selectedCard {
-                CardDetailView(card: selectedCard)
-            } else {
-                CardPlaceholderView()
+        NavigationStack {
+            Group {
+                if cards.isEmpty {
+                    ContentUnavailableView(
+                        "No Cards",
+                        systemImage: "photo.on.rectangle.angled",
+                        description: Text("The catalog could not be loaded.")
+                    )
+                } else {
+                    List(cards, id: \.uuid) { card in
+                        HStack(spacing: 12) {
+                            CardThumbnailView(card: card)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(card.title)
+                                    .font(.headline)
+                                    .lineLimit(2)
+                                if let creator = card.creator {
+                                    Text(creator.name)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let date = card.displayDate {
+                                    Text(date)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        }
-        .searchable(text: $searchText)
-    }
-    
-    private var filteredCards: [CardSchemaV1.StereoCard] {
-        if searchText.isEmpty {
-            return allCards
-        } else {
-            return allCards.filter { card in
-                let title = card.titlePick?.text ?? ""
-                return title.localizedCaseInsensitiveContains(searchText)
-            }
+            .navigationTitle("Stereologue")
         }
     }
 }

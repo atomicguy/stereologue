@@ -1,28 +1,31 @@
 //
 //  Subject.swift
-//  Retroview
+//  Stereologue
 //
-//  Created by Adam Schuster on 4/20/24.
+//  Normalized topic subject model (~1,789 unique).
+//  Many-to-many: a card has multiple subjects, a subject has many cards.
 //
 
 import Foundation
 import SwiftData
 
-enum SubjectSchemaV1: VersionedSchema {
-    static var versionIdentifier: Schema.Version = .init(1, 0, 0)
+@Model
+final class Subject {
 
-    static var models: [any PersistentModel.Type] {
-        [Subject.self, CardSchemaV1.StereoCard.self]
+    #Unique<Subject>([\.name])
+
+    #Index<Subject>([\.name])
+
+    var name: String
+
+    @Relationship(inverse: \StereoCard.subjects)
+    var cards: [StereoCard] = []
+
+    var cardCount: Int {
+        cards.count
     }
 
-    @Model
-    class Subject {
-        var name: String
-        var cards: [CardSchemaV1.StereoCard] = []
-        @Attribute(.externalStorage) var thumbnailData: Data?
-
-        init(name: String) {
-            self.name = name
-        }
+    init(name: String = "") {
+        self.name = name
     }
 }

@@ -1,72 +1,61 @@
+//
+//  CardThumbnailView.swift
+//  Stereologue
+//
+//  Displays a thumbnail of a stereoview card's front image using Nuke.
+//
+
 import SwiftUI
-import SwiftData
+import NukeUI
+import Nuke
+import OSLog
+
+private let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "CardThumbnail")
 
 struct CardThumbnailView: View {
-    let card: CardSchemaV1.StereoCard
-    
-    @State private var thumbnailImage: Image?
-    
+    let card: StereoCard
+
     var body: some View {
-        VStack(spacing: 6) {
-            // Card image area
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(cardColor)
-                
-                if let thumbnailImage = thumbnailImage {
-                    thumbnailImage
+        if let url = card.frontImageURL(quality: "r") {
+            LazyImage(url: url) { state in
+                if let image = state.image {
+                    image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .clipped()
+                } else if let error = state.error {
+                    placeholder
+                        .onAppear {
+                            logger.error("Failed to load image for \(card.uuid): \(error.localizedDescription)")
+                            logger.error("URL was: \(url.absoluteString)")
+                        }
+                } else if state.isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    // Placeholder
-                    Image(systemName: "photo")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
+                    placeholder
                 }
             }
-            .aspectRatio(3/2, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            
-            // Card metadata
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayTitle)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                
-                if let author = card.authors.first?.name {
-                    Text(author)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+            .priority(.high)
+            .onAppear {
+                logger.debug("Loading thumbnail for \(card.uuid) from \(url.absoluteString)")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .task {
-            await loadThumbnail()
-        }
-    }
-    
-    private var displayTitle: String {
-        card.titlePick?.text ?? "Untitled Card"
-    }
-    
-    private var cardColor: Color {
-        if let color = ColorUtils.color(from: card.cardColor) {
-            return color.opacity(card.colorOpacity)
+            .frame(width: 80, height: 50)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
         } else {
-            return ColorUtils.defaultCardColor
+            placeholder
+                .onAppear {
+                    logger.debug("No frontImageID for card \(card.uuid) (frontImageID=\(card.frontImageID ?? "nil"))")
+                }
         }
     }
-    
-    private func loadThumbnail() async {
-        // For now, just set a placeholder
-        // In the future, this would load actual image data
-        guard let thumbnailData = card.frontThumbnailData else { return }
-        
-        thumbnailImage = ImageUtils.loadImage(from: thumbnailData)
+
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(.quaternary)
+            .frame(width: 80, height: 50)
+            .overlay {
+                Image(systemName: "photo")
+                    .foregroundStyle(.tertiary)
+            }
     }
 }

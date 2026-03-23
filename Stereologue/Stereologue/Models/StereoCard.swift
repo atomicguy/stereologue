@@ -1,192 +1,188 @@
 //
 //  StereoCard.swift
-//  Retroview
+//  Stereologue
 //
-//  Created by Adam Schuster on 4/6/24.
+//  Created by Adam Schuster on 7/7/25.
 //
 
 import Foundation
 import SwiftData
-import SwiftUI
 
-enum CardSchemaV1: VersionedSchema {
-    static var versionIdentifier: Schema.Version = .init(0, 1, 0)
+// MARK: - Detection Data (Embedded Codable)
 
-    static var models: [any PersistentModel.Type] {
-        [
-            CardSchemaV1.StereoCard.self,
-            TitleSchemaV1.Title.self,
-            AuthorSchemaV1.Author.self,
-            SubjectSchemaV1.Subject.self,
-            DateSchemaV1.Date.self,
-        ]
-    }
+/// Bounding box detection for one side of a stereoview card.
+/// Stored as a CompositeAttribute on StereoCard — SwiftData flattens
+/// the fields into the parent table, so no join is needed.
+struct ImageDetection: Codable, Hashable, Sendable {
+    var detectionID: String
+    var classification: String   // "left image" or "right image"
+    var confidence: Double
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
 
-    @Model
-    class StereoCard {
-        // MARK: - Core Properties
-        @Attribute(.unique) var uuid: UUID
-        var imageFrontId: String?
-        var imageBackId: String?
-        var cardColor: String = "#F5E6D3"
-        var colorOpacity: Double
-
-        // MARK: - Image Storage
-        @Attribute(.externalStorage) var frontThumbnailData: Data?
-        @Attribute(.externalStorage) var frontStandardData: Data?
-        @Attribute(.externalStorage) var backThumbnailData: Data?
-        @Attribute(.externalStorage) var backStandardData: Data?
-        @Attribute(.externalStorage) var spatialPhotoData: Data?
-
-        // MARK: - Relationships
-        @Relationship(deleteRule: .cascade, inverse: \TitleSchemaV1.Title.cards)
-        var titles = [TitleSchemaV1.Title]()
-
-        @Relationship(deleteRule: .nullify, inverse: \TitleSchemaV1.Title.picks)
-        var titlePick: TitleSchemaV1.Title?
-
-        @Relationship(inverse: \AuthorSchemaV1.Author.cards)
-        var authors = [AuthorSchemaV1.Author]()
-
-        @Relationship(inverse: \SubjectSchemaV1.Subject.cards)
-        var subjects = [SubjectSchemaV1.Subject]()
-
-        @Relationship(inverse: \DateSchemaV1.Date.cards)
-        var dates = [DateSchemaV1.Date]()
-
-        var collections: [CollectionSchemaV1.Collection] = []
-
-        @Relationship(deleteRule: .cascade)
-        var crops: [CropSchemaV1.Crop] = []
-
-        // MARK: - Computed Properties
-        var leftCrop: CropSchemaV1.Crop? {
-            get { crops.first { $0.side == CropSchemaV1.Side.left.rawValue } }
-            set {
-                if let existingIndex = crops.firstIndex(where: {
-                    $0.side == CropSchemaV1.Side.left.rawValue
-                }) {
-                    crops.remove(at: existingIndex)
-                }
-                if let newCrop = newValue {
-                    crops.append(newCrop)
-                    newCrop.card = self
-                }
-            }
-        }
-
-        var rightCrop: CropSchemaV1.Crop? {
-            get { crops.first { $0.side == CropSchemaV1.Side.right.rawValue } }
-            set {
-                if let existingIndex = crops.firstIndex(where: {
-                    $0.side == CropSchemaV1.Side.right.rawValue
-                }) {
-                    crops.remove(at: existingIndex)
-                }
-                if let newCrop = newValue {
-                    crops.append(newCrop)
-                    newCrop.card = self
-                }
-            }
-        }
-
-        var color: Color {
-            get {
-                (Color(hex: cardColor) ?? Color(hex: "#F5E6D3")!)
-                    .opacity(colorOpacity)
-            }
-            set {
-                cardColor = newValue.toHex() ?? "#F5E6D3"
-                colorOpacity = 0.15
-            }
-        }
-
-        // Computed property for temporary URL access when needed
-        var temporarySpatialPhotoURL: URL? {
-            guard let data = spatialPhotoData else { return nil }
-
-            // Create URL in temporary directory
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent(uuid.uuidString)
-                .appendingPathExtension("heic")
-
-            try? data.write(to: url)
-            return url
-        }
-
-        // OS 26: Helper computed properties for common queries
-        var primaryAuthor: AuthorSchemaV1.Author? {
-            authors.first
-        }
-        
-        var primarySubject: SubjectSchemaV1.Subject? {
-            subjects.first
-        }
-        
-        var primaryDate: DateSchemaV1.Date? {
-            dates.first
-        }
-        
-        var displayTitle: String {
-            titlePick?.text ?? titles.first?.text ?? "Untitled"
-        }
-        
-        // OS 26: Check if card has complete metadata
-        var hasCompleteMetadata: Bool {
-            !titles.isEmpty && !authors.isEmpty && !dates.isEmpty
-        }
-        
-        // OS 26: Check if card has any images stored
-        var hasFrontImage: Bool {
-            frontThumbnailData != nil || frontStandardData != nil
-        }
-        
-        var hasBackImage: Bool {
-            backThumbnailData != nil || backStandardData != nil
-        }
-        
-        var hasSpatialPhoto: Bool {
-            spatialPhotoData != nil
-        }
-        
-        // MARK: - Initialization
-        init(
-            uuid: UUID,
-            imageFrontId: String? = nil,
-            imageBackId: String? = nil,
-            cardColor: String = "#F5E6D3",
-            colorOpacity: Double = 0.15,
-            titles: [TitleSchemaV1.Title] = [],
-            authors: [AuthorSchemaV1.Author] = [],
-            subjects: [SubjectSchemaV1.Subject] = [],
-            dates: [DateSchemaV1.Date] = [],
-            crops: [CropSchemaV1.Crop] = []
-        ) {
-            self.uuid = uuid
-            self.imageFrontId = imageFrontId
-            self.imageBackId = imageBackId
-            self.cardColor = cardColor
-            self.colorOpacity = colorOpacity
-            self.titles = titles
-            self.authors = authors
-            self.subjects = subjects
-            self.dates = dates
-            self.crops = crops
-
-            self.frontThumbnailData = nil
-            self.frontStandardData = nil
-            self.backThumbnailData = nil
-            self.backStandardData = nil
-        }
+    init(
+        detectionID: String = "",
+        classification: String = "",
+        confidence: Double = 0,
+        x: Double = 0,
+        y: Double = 0,
+        width: Double = 0,
+        height: Double = 0
+    ) {
+        self.detectionID = detectionID
+        self.classification = classification
+        self.confidence = confidence
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
     }
 }
 
-// MARK: - Transferable Conformance
-extension CardSchemaV1.StereoCard: Transferable {
-    static var transferRepresentation: some TransferRepresentation {
-        ProxyRepresentation<CardSchemaV1.StereoCard, String>(exporting: {
-            card in
-            card.uuid.uuidString
-        })
+// MARK: - StereoCard Model
+
+@Model
+final class StereoCard {
+
+    #Unique<StereoCard>([\.uuid])
+
+    #Index<StereoCard>(
+        [\.uuid],
+        [\.yearStart],
+        [\.yearEnd],
+        [\.collection],
+        [\.division]
+    )
+
+    // MARK: Core Identity
+    var uuid: String
+
+    // MARK: Descriptive Metadata
+    var title: String
+    var physicalForm: String?
+    var division: String?
+    var collection: String?
+    var shelfLocator: String?
+
+    // MARK: Dates
+    /// Raw date strings from the source data, preserved for display.
+    var dateStartRaw: String?
+    var dateEndRaw: String?
+    /// Parsed integer years for indexed queries and browsing.
+    var yearStart: Int?
+    var yearEnd: Int?
+
+    // MARK: Relationships
+    var creator: Creator?
+
+    var subjects: [Subject] = []
+
+    var places: [Place] = []
+
+    // MARK: Image IDs (NYPL IIIF)
+    /// Front of card image ID, e.g. "G91F069_201ZF"
+    var frontImageID: String?
+    /// Back of card image ID, e.g. "G91F069_201ZB"
+    var backImageID: String?
+
+    // MARK: Image Dimensions
+    var imageWidth: Double?
+    var imageHeight: Double?
+
+    // MARK: Detection Data (CompositeAttribute)
+    var leftDetection: ImageDetection
+    var rightDetection: ImageDetection
+
+    init(
+        uuid: String,
+        title: String = "",
+        dateStartRaw: String? = nil,
+        dateEndRaw: String? = nil,
+        yearStart: Int? = nil,
+        yearEnd: Int? = nil,
+        physicalForm: String? = nil,
+        division: String? = nil,
+        collection: String? = nil,
+        shelfLocator: String? = nil,
+        frontImageID: String? = nil,
+        backImageID: String? = nil,
+        imageWidth: Double? = nil,
+        imageHeight: Double? = nil,
+        leftDetection: ImageDetection = ImageDetection(),
+        rightDetection: ImageDetection = ImageDetection()
+    ) {
+        self.uuid = uuid
+        self.title = title
+        self.dateStartRaw = dateStartRaw
+        self.dateEndRaw = dateEndRaw
+        self.yearStart = yearStart
+        self.yearEnd = yearEnd
+        self.physicalForm = physicalForm
+        self.division = division
+        self.collection = collection
+        self.shelfLocator = shelfLocator
+        self.frontImageID = frontImageID
+        self.backImageID = backImageID
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.leftDetection = leftDetection
+        self.rightDetection = rightDetection
+    }
+}
+
+// MARK: - Computed Helpers
+
+extension StereoCard {
+
+    /// Human-readable date string for display.
+    var displayDate: String? {
+        switch (yearStart, yearEnd) {
+        case let (start?, end?) where start == end:
+            return "\(start)"
+        case let (start?, end?):
+            return "\(start)–\(end)"
+        case let (start?, nil):
+            return "\(start)"
+        case let (nil, end?):
+            return "–\(end)"
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    /// Extracts the leading 4-digit year from a raw date string like "1871-08" or "1850".
+    static func parseYear(from rawDate: String?) -> Int? {
+        guard let raw = rawDate, raw.count >= 4 else { return nil }
+        let yearString = String(raw.prefix(4))
+        return Int(yearString)
+    }
+
+    // MARK: - Image URLs
+
+    /// Base URL for NYPL IIIF image server.
+    private static let iiifBase = "https://iiif-prod.nypl.org/index.php"
+
+    /// Returns the IIIF URL for the front of the card at the given quality.
+    ///
+    /// Quality codes:
+    /// - `b` — .jpeg center cropped thumbnail (100×100 pixels)
+    /// - `f` — .jpeg (140 pixels tall, variable width)
+    /// - `t` — .gif (150 pixels on the long side)
+    /// - `r` — .jpeg (300 pixels on the long side)
+    /// - `w` — .jpeg (760 pixels on the long side)
+    /// - `q` — .jpeg (1600 pixels on the long side)
+    /// - `v` — .jpeg (2560 pixels on the long side)
+    /// - `g` — .jpeg original dimensions
+    func frontImageURL(quality: String = "w") -> URL? {
+        guard let id = frontImageID else { return nil }
+        return URL(string: "\(Self.iiifBase)?id=\(id)&t=\(quality)")
+    }
+
+    /// Returns the IIIF URL for the back of the card at the given quality.
+    func backImageURL(quality: String = "w") -> URL? {
+        guard let id = backImageID else { return nil }
+        return URL(string: "\(Self.iiifBase)?id=\(id)&t=\(quality)")
     }
 }
