@@ -39,6 +39,35 @@ struct ImageDetection: Codable, Hashable, Sendable {
         self.width = width
         self.height = height
     }
+
+    // Explicit nonisolated Codable conformance so SwiftData's
+    // macro-generated persistence code can encode/decode outside
+    // the main actor.
+    private enum CodingKeys: String, CodingKey {
+        case detectionID, classification, confidence, x, y, width, height
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        detectionID = try container.decode(String.self, forKey: .detectionID)
+        classification = try container.decode(String.self, forKey: .classification)
+        confidence = try container.decode(Double.self, forKey: .confidence)
+        x = try container.decode(Double.self, forKey: .x)
+        y = try container.decode(Double.self, forKey: .y)
+        width = try container.decode(Double.self, forKey: .width)
+        height = try container.decode(Double.self, forKey: .height)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(detectionID, forKey: .detectionID)
+        try container.encode(classification, forKey: .classification)
+        try container.encode(confidence, forKey: .confidence)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+    }
 }
 
 // MARK: - StereoCard Model

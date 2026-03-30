@@ -59,3 +59,11 @@ struct CardThumbnailView: View {
             }
     }
 }
+
+#if DEBUG
+#Preview(traits: .sizeThatFitsLayout) {
+    CardThumbnailView(card: PreviewSampleData.sampleCard)
+        .padding()
+        .previewEnvironment()
+}
+#endif

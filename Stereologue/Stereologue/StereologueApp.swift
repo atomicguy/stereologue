@@ -13,11 +13,13 @@ struct StereologueApp: App {
 
     let catalogContainer: ModelContainer
     let userContainer: ModelContainer
+    let userDataService: UserDataService
 
     init() {
         do {
             catalogContainer = try StereologueContainers.makeCatalogContainer()
             userContainer = try StereologueContainers.makeUserContainer()
+            userDataService = UserDataService(userContext: userContainer.mainContext)
         } catch {
             fatalError("Failed to initialize model containers: \(error)")
         }
@@ -28,6 +30,7 @@ struct StereologueApp: App {
             ContentView()
                 .modelContainer(catalogContainer)
                 .environment(\.userModelContext, userContainer.mainContext)
+                .environment(userDataService)
         }
     }
 }

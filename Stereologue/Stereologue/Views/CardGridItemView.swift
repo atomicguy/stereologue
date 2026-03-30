@@ -68,3 +68,11 @@ struct CardGridItemView: View {
             }
     }
 }
+
+#if DEBUG
+#Preview(traits: .sizeThatFitsLayout) {
+    CardGridItemView(card: PreviewSampleData.sampleCard)
+        .frame(width: 240)
+        .previewEnvironment()
+}
+#endif
