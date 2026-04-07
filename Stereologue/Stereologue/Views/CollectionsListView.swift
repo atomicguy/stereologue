@@ -1,47 +1,66 @@
 //
-//  PlacesListView.swift
+//  CollectionsListView.swift
 //  Stereologue
 //
-//  Browse places in a grid with mosaic thumbnails.
+//  Browse collections in a grid with mosaic thumbnails.
+//  Collections are derived from the `collection` string on StereoCard.
 //
 
 import SwiftUI
 import SwiftData
 import NukeUI
 
-struct PlacesListView: View {
-    @Query(sort: \Place.name) private var places: [Place]
+/// Lightweight value type for navigating to a collection's cards.
+struct CollectionDestination: Hashable {
+    let name: String
+}
+
+struct CollectionsListView: View {
+    @Query(sort: \StereoCard.collection) private var allCards: [StereoCard]
 
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
     ]
 
+    /// Cards grouped by collection name, sorted alphabetically.
+    private var collections: [(name: String, cards: [StereoCard])] {
+        let grouped = Dictionary(grouping: allCards.filter { $0.collection != nil }) {
+            $0.collection!
+        }
+        return grouped
+            .map { (name: $0.key, cards: $0.value) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(places, id: \.name) { place in
-                    NavigationLink(value: place) {
-                        PlaceGridItemView(place: place)
+                ForEach(collections, id: \.name) { collection in
+                    NavigationLink(value: CollectionDestination(name: collection.name)) {
+                        CollectionGridItemView(
+                            name: collection.name,
+                            cards: collection.cards
+                        )
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal)
         }
-        .navigationTitle("Places")
+        .navigationTitle("Collections")
     }
 }
 
 // MARK: - Grid Item
 
-private struct PlaceGridItemView: View {
-    let place: Place
+private struct CollectionGridItemView: View {
+    let name: String
+    let cards: [StereoCard]
 
     private let aspectRatio: CGFloat = 1.6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Thumbnail mosaic with count badge
             Color.clear
                 .aspectRatio(aspectRatio, contentMode: .fit)
                 .overlay {
@@ -51,9 +70,10 @@ private struct PlaceGridItemView: View {
                     countBadge
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
+                .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12))
+                .hoverEffect(.lift)
 
-            // Place name
-            Text(place.name)
+            Text(name)
                 .font(.caption)
                 .lineLimit(2)
         }
@@ -62,7 +82,7 @@ private struct PlaceGridItemView: View {
     // MARK: - 2×2 Mosaic
 
     private var mosaicGrid: some View {
-        let displayCards = Array(place.cards.prefix(4))
+        let displayCards = Array(cards.prefix(4))
 
         return Grid(horizontalSpacing: 2, verticalSpacing: 2) {
             GridRow {
@@ -96,7 +116,7 @@ private struct PlaceGridItemView: View {
     // MARK: - Count Badge
 
     private var countBadge: some View {
-        Text("\(place.cardCount)")
+        Text("\(cards.count)")
             .font(.caption2.weight(.medium))
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
@@ -109,7 +129,7 @@ private struct PlaceGridItemView: View {
 #if DEBUG
 #Preview(traits: .fixedLayout(width: 900, height: 700)) {
     NavigationStack {
-        PlacesListView()
+        CollectionsListView()
     }
     .previewEnvironment()
 }

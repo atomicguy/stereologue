@@ -14,6 +14,8 @@ struct CardGridView: View {
     let emptySystemImage: String
     let emptyDescription: String
 
+    @Environment(CardListContext.self) private var cardListContext
+
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
     ]
@@ -52,6 +54,8 @@ struct CardGridView: View {
                 }
             }
         }
+        .onAppear { cardListContext.cards = cards }
+        .onChange(of: cards.count) { cardListContext.cards = cards }
     }
 }
 

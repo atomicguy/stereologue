@@ -139,11 +139,14 @@ enum PreviewSampleData {
 
 /// Convenience modifier that injects both containers and the user data service.
 struct PreviewEnvironment: ViewModifier {
+    @State private var cardListContext = CardListContext()
+
     func body(content: Content) -> some View {
         content
             .modelContainer(PreviewSampleData.container)
             .environment(\.userModelContext, PreviewSampleData.userContainer.mainContext)
             .environment(PreviewSampleData.userDataService)
+            .environment(cardListContext)
     }
 }
 

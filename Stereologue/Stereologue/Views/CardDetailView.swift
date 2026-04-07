@@ -15,7 +15,7 @@ struct CardDetailView: View {
 
     @State private var noteText = ""
     @State private var notes: [UserNote] = []
-    @State private var isFavorite = false
+    @State private var showDetections = false
 
     var body: some View {
         ScrollView {
@@ -34,28 +34,23 @@ struct CardDetailView: View {
                 // Notes
                 notesSection
 
+                // NYPL attribution
+                attributionSection
+
                 Spacer(minLength: 40)
             }
         }
-        .navigationTitle(card.title)
         .fontDesign(.serif)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    userDataService.toggleFavorite(cardUUID: card.uuid)
-                    isFavorite.toggle()
-                } label: {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                }
-            }
-        }
         .onAppear {
-            isFavorite = userDataService.isFavorite(cardUUID: card.uuid)
             notes = userDataService.notes(for: card.uuid)
         }
     }
 
     // MARK: - Front Image
+
+    private var hasDetections: Bool {
+        card.leftDetection.width > 0 || card.rightDetection.width > 0
+    }
 
     @ViewBuilder
     private var frontImageSection: some View {
@@ -72,8 +67,69 @@ struct CardDetailView: View {
                         .overlay { ProgressView() }
                 }
             }
+            .overlay {
+                if showDetections {
+                    detectionOverlay
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if hasDetections {
+                    Button {
+                        withAnimation { showDetections.toggle() }
+                    } label: {
+                        Image(systemName: showDetections ? "viewfinder.circle.fill" : "viewfinder.circle")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .shadow(radius: 2)
+                            .padding(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             .backgroundExtensionEffect()
         }
+    }
+
+    // MARK: - Detection Overlay
+
+    private var detectionOverlay: some View {
+        GeometryReader { geo in
+            let imgW = card.imageWidth ?? 1
+            let imgH = card.imageHeight ?? 1
+            let scaleX = geo.size.width / imgW
+            let scaleY = geo.size.height / imgH
+
+            ZStack {
+                detectionBox(card.leftDetection, scaleX: scaleX, scaleY: scaleY, color: .blue)
+                detectionBox(card.rightDetection, scaleX: scaleX, scaleY: scaleY, color: .green)
+            }
+        }
+    }
+
+    private func detectionBox(
+        _ detection: ImageDetection,
+        scaleX: Double,
+        scaleY: Double,
+        color: Color
+    ) -> some View {
+        let w = detection.width * scaleX
+        let h = detection.height * scaleY
+        let centerX = detection.x * scaleX
+        let centerY = detection.y * scaleY
+
+        return RoundedRectangle(cornerRadius: 4)
+            .strokeBorder(color, lineWidth: 2)
+            .overlay(alignment: .topLeading) {
+                Text(detection.classification)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(color.opacity(0.7), in: Capsule())
+                    .offset(x: 4, y: 4)
+            }
+            .frame(width: w, height: h)
+            .position(x: centerX, y: centerY)
     }
 
     // MARK: - Back Image
@@ -116,45 +172,29 @@ struct CardDetailView: View {
             }
 
             if !card.subjects.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Subjects", systemImage: "tag")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    FlowLayout(spacing: 6) {
-                        ForEach(card.subjects, id: \.name) { subject in
-                            NavigationLink(value: subject) {
-                                Text(subject.name)
-                                    .font(.subheadline)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(.fill.tertiary, in: Capsule())
-                            }
+                FlowLayout(spacing: 6) {
+                    ForEach(card.subjects, id: \.name) { subject in
+                        NavigationLink(value: subject) {
+                            Label(subject.name, systemImage: "tag")
                         }
                     }
                 }
             }
 
             if !card.places.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Places", systemImage: "mappin.and.ellipse")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    FlowLayout(spacing: 6) {
-                        ForEach(card.places, id: \.name) { place in
-                            NavigationLink(value: place) {
-                                Text(place.name)
-                                    .font(.subheadline)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(.fill.tertiary, in: Capsule())
-                            }
+                FlowLayout(spacing: 6) {
+                    ForEach(card.places, id: \.name) { place in
+                        NavigationLink(value: place) {
+                            Label(place.name, systemImage: "mappin.and.ellipse")
                         }
                     }
                 }
             }
 
             if let collection = card.collection {
-                Label(collection, systemImage: "building.columns")
+                NavigationLink(value: CollectionDestination(name: collection)) {
+                    Label(collection, systemImage: "building.columns")
+                }
             }
         }
         .padding(.horizontal)
@@ -192,6 +232,25 @@ struct CardDetailView: View {
         .padding(.horizontal)
     }
 
+    // MARK: - Attribution
+
+    private var attributionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            Link(destination: URL(string: "https://digitalcollections.nypl.org/items/\(card.uuid)")!) {
+                Label("From The New York Public Library", systemImage: "building.columns")
+            }
+
+            Link(destination: URL(string: "https://rightsstatements.org/page/NoC-US/1.0/?language=en")!) {
+                Label("No known U.S. copyright restrictions", systemImage: "checkmark.seal")
+                    .font(.subheadline)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal)
+    }
+
     // MARK: - Placeholder
 
     private var imagePlaceholder: some View {
@@ -210,6 +269,7 @@ struct CardDetailView: View {
 #Preview(traits: .fixedLayout(width: 700, height: 800)) {
     NavigationStack {
         CardDetailView(card: PreviewSampleData.sampleCard)
+            .navigationTitle("Preview Card")
     }
     .previewEnvironment()
 }

@@ -17,6 +17,7 @@ struct ContentView: View {
 
     @State private var selectedTab: AppTab = .library
     @State private var albums: [UserAlbum] = []
+    @State private var cardListContext = CardListContext()
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -37,39 +38,43 @@ struct ContentView: View {
             }
 
             // MARK: - Browse
-            TabSection("Browse") {
-                Tab("Dates", systemImage: "calendar", value: AppTab.dates) {
-                    NavigationStack {
-                        DatesView()
-                            .navigationDestination(for: YearSelection.self) { selection in
-                                YearCardsView(year: selection.year)
-                            }
-                            .cardNavigationDestinations()
-                    }
-                }
-
-                Tab("Subjects", systemImage: "tag", value: AppTab.subjects) {
-                    NavigationStack {
-                        SubjectsListView()
-                            .cardNavigationDestinations()
-                    }
-                }
-
-                Tab("Creators", systemImage: "person.2", value: AppTab.creators) {
-                    NavigationStack {
-                        CreatorsListView()
-                            .cardNavigationDestinations()
-                    }
-                }
-
-                Tab("Places", systemImage: "mappin.and.ellipse", value: AppTab.places) {
-                    NavigationStack {
-                        PlacesListView()
-                            .cardNavigationDestinations()
-                    }
+            Tab("Dates", systemImage: "calendar", value: AppTab.dates) {
+                NavigationStack {
+                    DatesView()
+                        .navigationDestination(for: YearSelection.self) { selection in
+                            YearCardsView(year: selection.year)
+                        }
+                        .cardNavigationDestinations()
                 }
             }
-            .defaultVisibility(.hidden, for: .tabBar)
+
+            Tab("Subjects", systemImage: "tag", value: AppTab.subjects) {
+                NavigationStack {
+                    SubjectsListView()
+                        .cardNavigationDestinations()
+                }
+            }
+
+            Tab("Creators", systemImage: "person.2", value: AppTab.creators) {
+                NavigationStack {
+                    CreatorsListView()
+                        .cardNavigationDestinations()
+                }
+            }
+
+            Tab("Places", systemImage: "mappin.and.ellipse", value: AppTab.places) {
+                NavigationStack {
+                    PlacesListView()
+                        .cardNavigationDestinations()
+                }
+            }
+
+            Tab("Collections", systemImage: "building.columns", value: AppTab.collections) {
+                NavigationStack {
+                    CollectionsListView()
+                        .cardNavigationDestinations()
+                }
+            }
 
             // MARK: - Albums
             TabSection("Albums") {
@@ -96,6 +101,7 @@ struct ContentView: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         #endif
         .fontDesign(.serif)
+        .environment(cardListContext)
         .onAppear { refreshAlbums() }
     }
 
@@ -112,7 +118,7 @@ extension View {
     func cardNavigationDestinations() -> some View {
         self
             .navigationDestination(for: StereoCard.self) { card in
-                CardDetailView(card: card)
+                CardPagerView(initialCard: card)
             }
             .navigationDestination(for: Subject.self) { subject in
                 SubjectCardsView(subject: subject)
@@ -122,6 +128,9 @@ extension View {
             }
             .navigationDestination(for: Place.self) { place in
                 PlaceCardsView(place: place)
+            }
+            .navigationDestination(for: CollectionDestination.self) { destination in
+                CollectionCardsView(collectionName: destination.name)
             }
     }
 }
