@@ -91,6 +91,7 @@ struct CardDetailView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .transition(.opacity)
             .backgroundExtensionEffect()
         }
     }

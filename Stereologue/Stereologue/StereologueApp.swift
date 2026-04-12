@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Nuke
 
 @main
 struct StereologueApp: App {
@@ -16,6 +17,9 @@ struct StereologueApp: App {
     let userDataService: UserDataService
 
     init() {
+        // Set the shared Nuke pipeline for all LazyImage views
+        ImagePipeline.shared = .stereologue
+
         do {
             catalogContainer = try StereologueContainers.makeCatalogContainer()
             userContainer = try StereologueContainers.makeUserContainer()

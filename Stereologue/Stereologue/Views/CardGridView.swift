@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Nuke
 
 struct CardGridView: View {
     let cards: [StereoCard]
@@ -15,6 +16,10 @@ struct CardGridView: View {
     let emptyDescription: String
 
     @Environment(CardListContext.self) private var cardListContext
+    @State private var prefetcher = ImagePrefetcher(
+        pipeline: .shared,
+        destination: .diskCache
+    )
 
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
@@ -46,6 +51,7 @@ struct CardGridView: View {
                         ForEach(cards, id: \.uuid) { card in
                             NavigationLink(value: card) {
                                 CardGridItemView(card: card)
+                                    .onAppear { prefetchAround(card) }
                             }
                             .buttonStyle(.plain)
                         }
@@ -56,6 +62,15 @@ struct CardGridView: View {
         }
         .onAppear { cardListContext.cards = cards }
         .onChange(of: cards.count) { cardListContext.cards = cards }
+        .onDisappear { prefetcher.stopPrefetching() }
+    }
+
+    private func prefetchAround(_ card: StereoCard) {
+        guard let index = cards.firstIndex(where: { $0.uuid == card.uuid }) else { return }
+        // Prefetch the next 10 cards ahead
+        let prefetchRange = (index + 1)..<min(index + 11, cards.count)
+        let urls = cards[prefetchRange].compactMap { $0.frontImageURL(quality: "r") }
+        prefetcher.startPrefetching(with: urls)
     }
 }
 

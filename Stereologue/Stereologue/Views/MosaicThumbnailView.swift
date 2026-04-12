@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Nuke
 import NukeUI
 
 struct MosaicThumbnailView: View {
@@ -32,7 +33,7 @@ struct MosaicThumbnailView: View {
 
     @ViewBuilder
     private func mosaicCell(_ card: StereoCard?) -> some View {
-        if let card, let url = card.frontImageURL(quality: "t") {
+        if let card, let url = card.frontImageURL(quality: "b") {
             LazyImage(url: url) { state in
                 if let image = state.image {
                     image.resizable().aspectRatio(contentMode: .fill)
@@ -40,6 +41,9 @@ struct MosaicThumbnailView: View {
                     Color(.systemFill)
                 }
             }
+            .processors([.resize(width: 80)])
+            .priority(.low)
+            .transition(.opacity)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
         } else {

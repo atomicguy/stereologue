@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Nuke
 import NukeUI
 
 struct SubjectsListView: View {
@@ -78,7 +79,7 @@ private struct SubjectGridItemView: View {
 
     @ViewBuilder
     private func mosaicCell(_ card: StereoCard?) -> some View {
-        if let card, let url = card.frontImageURL(quality: "r") {
+        if let card, let url = card.frontImageURL(quality: "b") {
             LazyImage(url: url) { state in
                 if let image = state.image {
                     image.resizable().aspectRatio(contentMode: .fill)
@@ -86,6 +87,9 @@ private struct SubjectGridItemView: View {
                     Color(.systemFill)
                 }
             }
+            .processors([.resize(width: 150)])
+            .priority(.low)
+            .transition(.opacity)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
         } else {

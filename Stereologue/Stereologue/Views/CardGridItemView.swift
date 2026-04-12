@@ -41,10 +41,11 @@ struct CardGridItemView: View {
                     placeholderContent
                 } else {
                     placeholderContent
-                        .overlay { ProgressView() }
                 }
             }
-            .priority(.high)
+            .processors([.resize(width: 300)])
+            .priority(.normal)
+            .transition(.opacity)
         } else {
             placeholderContent
         }
