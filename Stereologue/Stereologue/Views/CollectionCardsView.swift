@@ -9,35 +9,23 @@ import SwiftUI
 import SwiftData
 
 struct CollectionCardsView: View {
-    let collectionName: String
-
-    @Query private var cards: [StereoCard]
-
-    init(collectionName: String) {
-        self.collectionName = collectionName
-        _cards = Query(
-            filter: #Predicate<StereoCard> { card in
-                card.collection == collectionName
-            },
-            sort: \.title
-        )
-    }
+    let collection: Collection
 
     var body: some View {
         CardGridView(
-            cards: cards,
+            cards: collection.cards,
             emptyTitle: "No Cards",
             emptySystemImage: "building.columns",
             emptyDescription: "No cards in this collection."
         )
-        .navigationTitle(collectionName)
+        .navigationTitle(collection.name)
     }
 }
 
 #if DEBUG
 #Preview(traits: .fixedLayout(width: 900, height: 700)) {
     NavigationStack {
-        CollectionCardsView(collectionName: "Robert N. Dennis Collection")
+        CollectionCardsView(collection: PreviewSampleData.sampleCollection)
     }
     .previewEnvironment()
 }

@@ -129,8 +129,8 @@ extension View {
             .navigationDestination(for: Place.self) { place in
                 PlaceCardsView(place: place)
             }
-            .navigationDestination(for: CollectionDestination.self) { destination in
-                CollectionCardsView(collectionName: destination.name)
+            .navigationDestination(for: Collection.self) { collection in
+                CollectionCardsView(collection: collection)
             }
     }
 }

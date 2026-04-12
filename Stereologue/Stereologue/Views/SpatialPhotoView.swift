@@ -59,7 +59,9 @@ struct SpatialPhotoView: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.85)
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.95)
                 .ignoresSafeArea()
 
             if let spatialPhotoURL {
@@ -83,13 +85,53 @@ struct SpatialPhotoView: View {
             } else if isLoading {
                 ProgressView()
                     .scaleEffect(1.5)
-                    .tint(.white)
+            }
+
+            // Edge tap zones for prev/next navigation
+            HStack(spacing: 0) {
+                Button {
+                    goToPrevious()
+                } label: {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(alignment: .leading) {
+                            Image(systemName: "chevron.compact.left")
+                                .font(.largeTitle)
+                                .foregroundStyle(.white.opacity(0.5))
+                                .padding(.leading, 20)
+                        }
+                }
+                .buttonStyle(.plain)
+                .opacity(hasPrevious && !isLoading ? 1 : 0)
+                .allowsHitTesting(hasPrevious && !isLoading)
+                .hoverEffect(.highlight)
+
+                Spacer()
+                    .frame(maxWidth: .infinity)
+
+                Button {
+                    goToNext()
+                } label: {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(alignment: .trailing) {
+                            Image(systemName: "chevron.compact.right")
+                                .font(.largeTitle)
+                                .foregroundStyle(.white.opacity(0.5))
+                                .padding(.trailing, 20)
+                        }
+                }
+                .buttonStyle(.plain)
+                .opacity(hasNext && !isLoading ? 1 : 0)
+                .allowsHitTesting(hasNext && !isLoading)
+                .hoverEffect(.highlight)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("")
         .navigationBarHidden(true)
-        .gesture(swipeGesture)
         .ornament(attachmentAnchor: .scene(.bottom)) {
             navigationOrnament
         }
@@ -111,7 +153,7 @@ struct SpatialPhotoView: View {
 
             Text(currentCard?.title ?? "")
                 .font(.headline)
-                .lineLimit(1)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
             Button {
@@ -128,22 +170,8 @@ struct SpatialPhotoView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .frame(width: 650)
+        .frame(minWidth: 650, maxWidth: 900)
         .glassBackgroundEffect()
-    }
-
-    // MARK: - Swipe Gesture
-
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 50)
-            .onEnded { value in
-                let horizontal = value.translation.width
-                if horizontal < -50, hasNext {
-                    goToNext()
-                } else if horizontal > 50, hasPrevious {
-                    goToPrevious()
-                }
-            }
     }
 
     // MARK: - Navigation

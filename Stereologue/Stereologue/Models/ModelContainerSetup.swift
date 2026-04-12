@@ -33,18 +33,31 @@ enum StereologueContainers {
             Creator.self,
             Subject.self,
             Place.self,
+            Collection.self,
         ])
 
         let destinationURL = storeDirectory.appendingPathComponent("CatalogStore.store")
 
-        // Copy bundled store on first launch
-        if !FileManager.default.fileExists(atPath: destinationURL.path) {
+        // Version of the bundled catalog - increment when schema changes
+        let currentCatalogVersion = 2  // v1 = string collections, v2 = Collection model
+        let installedVersion = UserDefaults.standard.integer(forKey: "CatalogStoreVersion")
+
+        // Copy bundled store on first launch OR when version changes
+        if !FileManager.default.fileExists(atPath: destinationURL.path) || installedVersion < currentCatalogVersion {
             guard let bundledURL = Bundle.main.url(forResource: "CatalogStore", withExtension: "store") else {
                 fatalError("CatalogStore.store not found in app bundle")
             }
             do {
+                // Remove old store if it exists
+                try? FileManager.default.removeItem(at: destinationURL)
+                
+                // Copy new store
                 try FileManager.default.copyItem(at: bundledURL, to: destinationURL)
-                logger.info("Copied bundled CatalogStore.store to Application Support")
+                
+                // Update version
+                UserDefaults.standard.set(currentCatalogVersion, forKey: "CatalogStoreVersion")
+                
+                logger.info("Copied bundled CatalogStore.store v\(currentCatalogVersion) to Application Support")
             } catch {
                 fatalError("Failed to copy bundled catalog store: \(error)")
             }

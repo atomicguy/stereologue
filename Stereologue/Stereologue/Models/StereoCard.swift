@@ -81,7 +81,6 @@ final class StereoCard {
         [\.uuid],
         [\.yearStart],
         [\.yearEnd],
-        [\.collection],
         [\.division]
     )
 
@@ -92,7 +91,6 @@ final class StereoCard {
     var title: String
     var physicalForm: String?
     var division: String?
-    var collection: String?
     var shelfLocator: String?
 
     // MARK: Dates
@@ -109,6 +107,8 @@ final class StereoCard {
     var subjects: [Subject] = []
 
     var places: [Place] = []
+    
+    var collection: Collection?
 
     // MARK: Image IDs (NYPL IIIF)
     /// Front of card image ID, e.g. "G91F069_201ZF"
@@ -133,7 +133,6 @@ final class StereoCard {
         yearEnd: Int? = nil,
         physicalForm: String? = nil,
         division: String? = nil,
-        collection: String? = nil,
         shelfLocator: String? = nil,
         frontImageID: String? = nil,
         backImageID: String? = nil,
@@ -150,7 +149,6 @@ final class StereoCard {
         self.yearEnd = yearEnd
         self.physicalForm = physicalForm
         self.division = division
-        self.collection = collection
         self.shelfLocator = shelfLocator
         self.frontImageID = frontImageID
         self.backImageID = backImageID

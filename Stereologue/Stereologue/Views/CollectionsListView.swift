@@ -3,44 +3,25 @@
 //  Stereologue
 //
 //  Browse collections in a grid with mosaic thumbnails.
-//  Collections are derived from the `collection` string on StereoCard.
 //
 
 import SwiftUI
 import SwiftData
 import NukeUI
 
-/// Lightweight value type for navigating to a collection's cards.
-struct CollectionDestination: Hashable {
-    let name: String
-}
-
 struct CollectionsListView: View {
-    @Query(sort: \StereoCard.collection) private var allCards: [StereoCard]
+    @Query(sort: \Collection.name) private var collections: [Collection]
 
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
     ]
 
-    /// Cards grouped by collection name, sorted alphabetically.
-    private var collections: [(name: String, cards: [StereoCard])] {
-        let grouped = Dictionary(grouping: allCards.filter { $0.collection != nil }) {
-            $0.collection!
-        }
-        return grouped
-            .map { (name: $0.key, cards: $0.value) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(collections, id: \.name) { collection in
-                    NavigationLink(value: CollectionDestination(name: collection.name)) {
-                        CollectionGridItemView(
-                            name: collection.name,
-                            cards: collection.cards
-                        )
+                    NavigationLink(value: collection) {
+                        CollectionGridItemView(collection: collection)
                     }
                     .buttonStyle(.plain)
                 }
@@ -54,8 +35,7 @@ struct CollectionsListView: View {
 // MARK: - Grid Item
 
 private struct CollectionGridItemView: View {
-    let name: String
-    let cards: [StereoCard]
+    let collection: Collection
 
     private let aspectRatio: CGFloat = 1.6
 
@@ -73,7 +53,7 @@ private struct CollectionGridItemView: View {
                 .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12))
                 .hoverEffect(.lift)
 
-            Text(name)
+            Text(collection.name)
                 .font(.caption)
                 .lineLimit(2)
         }
@@ -82,7 +62,7 @@ private struct CollectionGridItemView: View {
     // MARK: - 2×2 Mosaic
 
     private var mosaicGrid: some View {
-        let displayCards = Array(cards.prefix(4))
+        let displayCards = Array(collection.cards.prefix(4))
 
         return Grid(horizontalSpacing: 2, verticalSpacing: 2) {
             GridRow {
@@ -116,7 +96,7 @@ private struct CollectionGridItemView: View {
     // MARK: - Count Badge
 
     private var countBadge: some View {
-        Text("\(cards.count)")
+        Text("\(collection.cardCount)")
             .font(.caption2.weight(.medium))
             .foregroundStyle(.white)
             .padding(.horizontal, 6)

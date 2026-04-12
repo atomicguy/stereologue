@@ -21,6 +21,7 @@ enum PreviewSampleData {
             Creator.self,
             Subject.self,
             Place.self,
+            Collection.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: config)
@@ -55,21 +56,27 @@ enum PreviewSampleData {
             context.insert(p)
         }
 
+        // Collections
+        let dennisCollection = Collection(name: "Robert N. Dennis Collection")
+        let stereoCollection = Collection(name: "Stereograph Collection")
+        context.insert(dennisCollection)
+        context.insert(stereoCollection)
+
         // Sample cards
-        let cardData: [(String, String, Int?, Creator?, [Subject], [Place])] = [
-            ("preview-001", "Brooklyn Bridge from Manhattan side, New York", 1901, keystone, [architecture, bridges], [newYork]),
-            ("preview-002", "Eiffel Tower from the Trocadero, Paris Exposition", 1889, underwood, [architecture, monuments], [paris]),
-            ("preview-003", "Niagara Falls from Prospect Point", 1905, keystone, [landscapes, waterfalls], [niagara]),
-            ("preview-004", "The Capitol Building, Washington", 1898, underwood, [architecture, monuments], [washington]),
-            ("preview-005", "Yosemite Falls from the Valley Floor", 1870, kilburn, [landscapes, waterfalls], [yosemite]),
-            ("preview-006", "Central Park, looking north from the terrace", 1895, keystone, [landscapes, people], [newYork]),
-            ("preview-007", "Arc de Triomphe, Paris", 1900, underwood, [architecture, monuments], [paris]),
-            ("preview-008", "Suspension Bridge over the Niagara River", 1885, kilburn, [bridges, landscapes], [niagara]),
-            ("preview-009", "Washington Monument from the Mall", 1893, underwood, [monuments], [washington]),
-            ("preview-010", "El Capitan and Bridal Veil Fall, Yosemite", 1872, kilburn, [landscapes, waterfalls], [yosemite]),
+        let cardData: [(String, String, Int?, Creator?, [Subject], [Place], Collection)] = [
+            ("preview-001", "Brooklyn Bridge from Manhattan side, New York", 1901, keystone, [architecture, bridges], [newYork], dennisCollection),
+            ("preview-002", "Eiffel Tower from the Trocadero, Paris Exposition", 1889, underwood, [architecture, monuments], [paris], dennisCollection),
+            ("preview-003", "Niagara Falls from Prospect Point", 1905, keystone, [landscapes, waterfalls], [niagara], stereoCollection),
+            ("preview-004", "The Capitol Building, Washington", 1898, underwood, [architecture, monuments], [washington], dennisCollection),
+            ("preview-005", "Yosemite Falls from the Valley Floor", 1870, kilburn, [landscapes, waterfalls], [yosemite], stereoCollection),
+            ("preview-006", "Central Park, looking north from the terrace", 1895, keystone, [landscapes, people], [newYork], dennisCollection),
+            ("preview-007", "Arc de Triomphe, Paris", 1900, underwood, [architecture, monuments], [paris], dennisCollection),
+            ("preview-008", "Suspension Bridge over the Niagara River", 1885, kilburn, [bridges, landscapes], [niagara], stereoCollection),
+            ("preview-009", "Washington Monument from the Mall", 1893, underwood, [monuments], [washington], dennisCollection),
+            ("preview-010", "El Capitan and Bridal Veil Fall, Yosemite", 1872, kilburn, [landscapes, waterfalls], [yosemite], stereoCollection),
         ]
 
-        for (uuid, title, year, creator, subjects, places) in cardData {
+        for (uuid, title, year, creator, subjects, places, collection) in cardData {
             let card = StereoCard(
                 uuid: uuid,
                 title: title,
@@ -80,6 +87,7 @@ enum PreviewSampleData {
             card.creator = creator
             card.subjects = subjects
             card.places = places
+            card.collection = collection
             context.insert(card)
         }
 
@@ -123,6 +131,10 @@ enum PreviewSampleData {
 
     static var samplePlace: Place {
         try! container.mainContext.fetch(FetchDescriptor<Place>()).first!
+    }
+
+    static var sampleCollection: Collection {
+        try! container.mainContext.fetch(FetchDescriptor<Collection>()).first!
     }
 
     static var sampleAlbum: UserAlbum {

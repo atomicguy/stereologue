@@ -23,6 +23,11 @@ struct CardDetailView: View {
                 // Hero front image — no horizontal padding so it extends under sidebar
                 frontImageSection
 
+                // Title
+                Text(card.title)
+                    .font(.title2.bold())
+                    .padding(.horizontal)
+
                 // Back image
                 if card.backImageID != nil {
                     backImageSection
@@ -192,8 +197,8 @@ struct CardDetailView: View {
             }
 
             if let collection = card.collection {
-                NavigationLink(value: CollectionDestination(name: collection)) {
-                    Label(collection, systemImage: "building.columns")
+                NavigationLink(value: collection) {
+                    Label(collection.name, systemImage: "building.columns")
                 }
             }
         }
@@ -269,7 +274,6 @@ struct CardDetailView: View {
 #Preview(traits: .fixedLayout(width: 700, height: 800)) {
     NavigationStack {
         CardDetailView(card: PreviewSampleData.sampleCard)
-            .navigationTitle("Preview Card")
     }
     .previewEnvironment()
 }

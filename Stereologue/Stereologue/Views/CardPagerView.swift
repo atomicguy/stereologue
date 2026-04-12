@@ -74,7 +74,7 @@ struct CardPagerView: View {
             }
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $currentCardUUID)
-            .navigationTitle(currentCard.title)
+            .navigationTitle("")
             .toolbar { cardToolbar(for: currentCard) }
             .onChange(of: currentCardUUID) {
                 isFavorite = userDataService.isFavorite(cardUUID: currentCard.uuid)
@@ -85,7 +85,7 @@ struct CardPagerView: View {
             }
         } else {
             CardDetailView(card: initialCard)
-                .navigationTitle(initialCard.title)
+                .navigationTitle("")
                 .toolbar { cardToolbar(for: initialCard) }
                 .onAppear {
                     snapshotContextIfNeeded()
