@@ -111,7 +111,7 @@ struct CardPagerView: View {
             Button {
                 showSpatialView = true
             } label: {
-                Label("View in Stereo", systemImage: "eye.circle")
+                Label("View in Stereo", systemImage: "cube.transparent")
             }
             .disabled(!card.hasStereoDetections)
         }
