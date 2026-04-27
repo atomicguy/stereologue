@@ -16,9 +16,10 @@ struct CardPagerView: View {
     @State private var cards: [StereoCard]?
     @State private var currentCardUUID: String?
     @State private var isFavorite = false
+    @State private var showWiggleStereo = false
     #if os(visionOS)
-    @State private var showSpatialView = false
-    private let spatialPhotoService = SpatialPhotoService()
+    @Environment(SpatialPhotoViewModel.self) private var spatialPhotoViewModel
+    @Environment(\.pushWindow) private var pushWindow
     #endif
 
     init(initialCard: StereoCard) {
@@ -41,20 +42,16 @@ struct CardPagerView: View {
     #endif
 
     var body: some View {
-        #if os(visionOS)
-        if showSpatialView {
-            SpatialPhotoView(
-                cards: stereoCards,
-                initialCardUUID: currentCard.uuid,
-                spatialPhotoService: spatialPhotoService
-            ) {
-                showSpatialView = false
-            }
-        } else {
-            cardContent
-        }
-        #else
         cardContent
+        #if !os(visionOS)
+            .sheet(isPresented: $showWiggleStereo) {
+                NavigationStack {
+                    WiggleStereoView(
+                        card: currentCard,
+                        cropOverride: nil
+                    )
+                }
+            }
         #endif
     }
 
@@ -109,7 +106,20 @@ struct CardPagerView: View {
         #if os(visionOS)
         ToolbarItem(placement: .secondaryAction) {
             Button {
-                showSpatialView = true
+                spatialPhotoViewModel.present(
+                    cards: stereoCards,
+                    initialCardUUID: card.uuid
+                )
+                pushWindow(id: "spatial-photo")
+            } label: {
+                Label("View in Stereo", systemImage: "cube.transparent")
+            }
+            .disabled(!card.hasStereoDetections)
+        }
+        #else
+        ToolbarItem(placement: .secondaryAction) {
+            Button {
+                showWiggleStereo = true
             } label: {
                 Label("View in Stereo", systemImage: "cube.transparent")
             }

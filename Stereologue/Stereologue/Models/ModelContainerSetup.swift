@@ -16,10 +16,20 @@ enum StereologueContainers {
     private static let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "Containers")
 
     private static var storeDirectory: URL {
-        let dir = URL.applicationSupportDirectory
-            .appendingPathComponent("Stereologue", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        get throws {
+            let dir = URL.applicationSupportDirectory
+                .appendingPathComponent("Stereologue", isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(
+                    at: dir,
+                    withIntermediateDirectories: true
+                )
+                return dir
+            } catch {
+                logger.error("Failed to create store directory: \(error)")
+                throw ContainerSetupError.directoryCreationFailed(error)
+            }
+        }
     }
 
     // MARK: - Catalog Container (Local Only)
@@ -36,7 +46,7 @@ enum StereologueContainers {
             Collection.self,
         ])
 
-        let destinationURL = storeDirectory.appendingPathComponent("CatalogStore.store")
+        let destinationURL = try storeDirectory.appendingPathComponent("CatalogStore.store")
 
         // Version of the bundled catalog - increment when schema changes
         let currentCatalogVersion = 2  // v1 = string collections, v2 = Collection model
@@ -45,7 +55,8 @@ enum StereologueContainers {
         // Copy bundled store on first launch OR when version changes
         if !FileManager.default.fileExists(atPath: destinationURL.path) || installedVersion < currentCatalogVersion {
             guard let bundledURL = Bundle.main.url(forResource: "CatalogStore", withExtension: "store") else {
-                fatalError("CatalogStore.store not found in app bundle")
+                logger.error("CatalogStore.store not found in app bundle")
+                throw ContainerSetupError.catalogStoreMissing
             }
             do {
                 // Remove old store if it exists
@@ -59,7 +70,8 @@ enum StereologueContainers {
                 
                 logger.info("Copied bundled CatalogStore.store v\(currentCatalogVersion) to Application Support")
             } catch {
-                fatalError("Failed to copy bundled catalog store: \(error)")
+                logger.error("Failed to copy bundled catalog store: \(error)")
+                throw ContainerSetupError.catalogStoreCopyFailed(error)
             }
         }
 
@@ -70,10 +82,15 @@ enum StereologueContainers {
             cloudKitDatabase: .none
         )
 
-        return try ModelContainer(
-            for: schema,
-            configurations: config
-        )
+        do {
+            return try ModelContainer(
+                for: schema,
+                configurations: config
+            )
+        } catch {
+            logger.error("Failed to create catalog container: \(error)")
+            throw ContainerSetupError.containerCreationFailed(error)
+        }
     }
 
     // MARK: - User Container (CloudKit Synced)
@@ -89,11 +106,12 @@ enum StereologueContainers {
         let schema = Schema([
             UserAlbum.self,
             UserAlbumEntry.self,
+            UserCropOverride.self,
             UserFavorite.self,
             UserNote.self,
         ])
 
-        let url = storeDirectory.appendingPathComponent("UserStore.store")
+        let url = try storeDirectory.appendingPathComponent("UserStore.store")
 
         let config = ModelConfiguration(
             "UserStore",
@@ -102,9 +120,14 @@ enum StereologueContainers {
             cloudKitDatabase: .none  // Change to .private(...) after adding iCloud entitlement
         )
 
-        return try ModelContainer(
-            for: schema,
-            configurations: config
-        )
+        do {
+            return try ModelContainer(
+                for: schema,
+                configurations: config
+            )
+        } catch {
+            logger.error("Failed to create user container: \(error)")
+            throw ContainerSetupError.containerCreationFailed(error)
+        }
     }
 }

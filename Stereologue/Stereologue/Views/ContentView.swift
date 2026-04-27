@@ -103,6 +103,7 @@ struct ContentView: View {
         .fontDesign(.serif)
         .environment(cardListContext)
         .onAppear { refreshAlbums() }
+        .userDataErrorAlert()
     }
 
     private func refreshAlbums() {

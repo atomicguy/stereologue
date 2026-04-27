@@ -10,12 +10,42 @@ import Foundation
 import SwiftData
 import OSLog
 
+/// Errors that can occur during user data operations.
+enum UserDataError: LocalizedError {
+    case fetchFailed(String, Error)
+    case saveFailed(Error)
+    case deleteFailed(Error)
+    case contextUnavailable
+    
+    var errorDescription: String? {
+        switch self {
+        case .fetchFailed(let operation, let error):
+            return "Failed to fetch \(operation): \(error.localizedDescription)"
+        case .saveFailed(let error):
+            return "Failed to save changes: \(error.localizedDescription)"
+        case .deleteFailed(let error):
+            return "Failed to delete item: \(error.localizedDescription)"
+        case .contextUnavailable:
+            return "Database context is not available"
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class UserDataService {
 
     private let userContext: ModelContext
     private let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "UserData")
+    
+    /// The most recent error that occurred, if any.
+    /// Views can observe this to show error alerts.
+    private(set) var lastError: UserDataError?
+    
+    /// Clears the last error. Call this after displaying an error to the user.
+    func clearLastError() {
+        lastError = nil
+    }
 
     init(userContext: ModelContext) {
         self.userContext = userContext
@@ -24,67 +54,212 @@ final class UserDataService {
     // MARK: - Favorites
 
     func isFavorite(cardUUID: String) -> Bool {
-        let descriptor = FetchDescriptor<UserFavorite>(
-            predicate: #Predicate { $0.cardUUID == cardUUID }
-        )
-        return (try? userContext.fetchCount(descriptor)) ?? 0 > 0
+        do {
+            let descriptor = FetchDescriptor<UserFavorite>(
+                predicate: #Predicate { $0.cardUUID == cardUUID }
+            )
+            return try userContext.fetchCount(descriptor) > 0
+        } catch {
+            logger.error("Failed to check favorite status for \(cardUUID): \(error)")
+            lastError = .fetchFailed("favorite status", error)
+            return false
+        }
     }
 
     func toggleFavorite(cardUUID: String) {
-        let descriptor = FetchDescriptor<UserFavorite>(
-            predicate: #Predicate { $0.cardUUID == cardUUID }
-        )
+        do {
+            let descriptor = FetchDescriptor<UserFavorite>(
+                predicate: #Predicate { $0.cardUUID == cardUUID }
+            )
 
-        if let existing = try? userContext.fetch(descriptor).first {
-            userContext.delete(existing)
-        } else {
-            let favorite = UserFavorite(cardUUID: cardUUID)
-            userContext.insert(favorite)
+            if let existing = try userContext.fetch(descriptor).first {
+                userContext.delete(existing)
+                logger.debug("Removed favorite: \(cardUUID)")
+            } else {
+                let favorite = UserFavorite(cardUUID: cardUUID)
+                userContext.insert(favorite)
+                logger.debug("Added favorite: \(cardUUID)")
+            }
+            
+            try saveContext()
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to toggle favorite for \(cardUUID): \(error)")
+            lastError = .fetchFailed("favorites", error)
         }
     }
 
     func allFavoriteUUIDs() -> [String] {
-        let descriptor = FetchDescriptor<UserFavorite>(
-            sortBy: [SortDescriptor(\.favoritedAt, order: .reverse)]
-        )
-        return (try? userContext.fetch(descriptor).map(\.cardUUID)) ?? []
+        do {
+            let descriptor = FetchDescriptor<UserFavorite>(
+                sortBy: [SortDescriptor(\.favoritedAt, order: .reverse)]
+            )
+            return try userContext.fetch(descriptor).map(\.cardUUID)
+        } catch {
+            logger.error("Failed to fetch all favorites: \(error)")
+            lastError = .fetchFailed("favorites", error)
+            return []
+        }
     }
 
     // MARK: - Notes
 
     func notes(for cardUUID: String) -> [UserNote] {
-        let descriptor = FetchDescriptor<UserNote>(
-            predicate: #Predicate { $0.cardUUID == cardUUID },
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-        )
-        return (try? userContext.fetch(descriptor)) ?? []
+        do {
+            let descriptor = FetchDescriptor<UserNote>(
+                predicate: #Predicate { $0.cardUUID == cardUUID },
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+            return try userContext.fetch(descriptor)
+        } catch {
+            logger.error("Failed to fetch notes for \(cardUUID): \(error)")
+            lastError = .fetchFailed("notes", error)
+            return []
+        }
     }
 
     func addNote(text: String, to cardUUID: String) {
-        let note = UserNote(cardUUID: cardUUID, text: text)
-        userContext.insert(note)
+        do {
+            let note = UserNote(cardUUID: cardUUID, text: text)
+            userContext.insert(note)
+            try saveContext()
+            logger.debug("Added note to \(cardUUID)")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to add note to \(cardUUID): \(error)")
+            lastError = .saveFailed(error)
+        }
     }
 
     func deleteNote(_ note: UserNote) {
-        userContext.delete(note)
+        do {
+            userContext.delete(note)
+            try saveContext()
+            logger.debug("Deleted note")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to delete note: \(error)")
+            lastError = .deleteFailed(error)
+        }
+    }
+
+    // MARK: - Crop Overrides
+
+    func cropOverride(for cardUUID: String) -> UserCropOverride? {
+        do {
+            let descriptor = FetchDescriptor<UserCropOverride>(
+                predicate: #Predicate { $0.cardUUID == cardUUID }
+            )
+            return try userContext.fetch(descriptor).first
+        } catch {
+            logger.error("Failed to fetch crop override for \(cardUUID): \(error)")
+            lastError = .fetchFailed("crop override", error)
+            return nil
+        }
+    }
+
+    func saveCropOverride(
+        cardUUID: String,
+        leftDetection: ImageDetection,
+        rightDetection: ImageDetection
+    ) {
+        do {
+            if let existing = cropOverride(for: cardUUID) {
+                existing.leftDetection = leftDetection
+                existing.rightDetection = rightDetection
+                existing.updatedAt = .now
+            } else {
+                let override = UserCropOverride(
+                    cardUUID: cardUUID,
+                    leftDetection: leftDetection,
+                    rightDetection: rightDetection
+                )
+                userContext.insert(override)
+            }
+            try saveContext()
+            logger.debug("Saved crop override for \(cardUUID)")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to save crop override for \(cardUUID): \(error)")
+            lastError = .saveFailed(error)
+        }
+    }
+
+    func deleteCropOverride(for cardUUID: String) {
+        do {
+            if let existing = cropOverride(for: cardUUID) {
+                userContext.delete(existing)
+                try saveContext()
+                logger.debug("Deleted crop override for \(cardUUID)")
+            }
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to delete crop override for \(cardUUID): \(error)")
+            lastError = .deleteFailed(error)
+        }
     }
 
     // MARK: - Albums
 
     func allAlbums() -> [UserAlbum] {
-        let descriptor = FetchDescriptor<UserAlbum>(
-            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-        )
-        return (try? userContext.fetch(descriptor)) ?? []
+        do {
+            let descriptor = FetchDescriptor<UserAlbum>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+            return try userContext.fetch(descriptor)
+        } catch {
+            logger.error("Failed to fetch albums: \(error)")
+            lastError = .fetchFailed("albums", error)
+            return []
+        }
     }
 
     func createAlbum(name: String) -> UserAlbum {
         let album = UserAlbum(name: name)
         userContext.insert(album)
+        
+        do {
+            try saveContext()
+            logger.debug("Created album: \(name)")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to create album: \(error)")
+            lastError = .saveFailed(error)
+        }
+        
         return album
     }
 
     func deleteAlbum(_ album: UserAlbum) {
-        userContext.delete(album)
+        do {
+            userContext.delete(album)
+            try saveContext()
+            logger.debug("Deleted album")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to delete album: \(error)")
+            lastError = .deleteFailed(error)
+        }
+    }
+    
+    // MARK: - Context Management
+    
+    /// Saves the user context and handles errors.
+    private func saveContext() throws {
+        do {
+            if userContext.hasChanges {
+                try userContext.save()
+            }
+        } catch {
+            logger.error("Failed to save context: \(error)")
+            throw UserDataError.saveFailed(error)
+        }
     }
 }

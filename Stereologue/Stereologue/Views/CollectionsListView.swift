@@ -51,8 +51,10 @@ private struct CollectionGridItemView: View {
                     countBadge
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
+                #if os(iOS) || os(visionOS)
                 .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12))
                 .hoverEffect(.lift)
+                #endif
 
             Text(collection.name)
                 .font(.caption)

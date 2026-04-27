@@ -25,8 +25,10 @@ struct CardGridItemView: View {
                 titleOverlay
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            #if os(iOS) || os(visionOS)
             .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12))
             .hoverEffect(.lift)
+            #endif
     }
 
     @ViewBuilder

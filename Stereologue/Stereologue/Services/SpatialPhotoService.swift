@@ -22,6 +22,27 @@ import UIKit
 import AppKit
 #endif
 
+/// Metadata to embed in spatial HEIC files for sharing.
+struct SpatialPhotoMetadata {
+    var title: String?
+    var creator: String?
+    var date: String?
+    var subjects: [String]
+    var places: [String]
+    var source: String?
+    var copyright: String?
+
+    init(card: StereoCard) {
+        self.title = card.title
+        self.creator = card.creator?.name
+        self.date = card.displayDate
+        self.subjects = card.subjects.map(\.name)
+        self.places = card.places.map(\.name)
+        self.source = "The New York Public Library"
+        self.copyright = "No known U.S. copyright restrictions"
+    }
+}
+
 /// Errors that can occur during spatial photo conversion.
 enum SpatialPhotoError: LocalizedError {
     case noFrontImage
@@ -119,10 +140,13 @@ actor SpatialPhotoService {
     ///
     /// - Parameters:
     ///   - card: The stereo card to convert.
+    ///   - cropOverride: Optional user-edited crop override. When provided,
+    ///     its detections are used instead of the card's ML detections.
     ///   - quality: IIIF quality code for the source image (default "v" = 2560px).
     /// - Returns: File URL of the generated spatial HEIC.
     func spatialPhotoURL(
         for card: StereoCard,
+        cropOverride: UserCropOverride? = nil,
         quality: String = "v"
     ) async throws -> URL {
         let outputURL = cacheDirectory.appendingPathComponent(
@@ -140,10 +164,17 @@ actor SpatialPhotoService {
             return try await existingTask.value
         }
 
+        let leftDet = cropOverride?.leftDetection ?? card.leftDetection
+        let rightDet = cropOverride?.rightDetection ?? card.rightDetection
+
         let task = Task<URL, Error> {
             defer { inFlightTasks[card.uuid] = nil }
             return try await createSpatialPhoto(
-                for: card, quality: quality, outputURL: outputURL
+                for: card,
+                leftDetection: leftDet,
+                rightDetection: rightDet,
+                quality: quality,
+                outputURL: outputURL
             )
         }
 
@@ -170,6 +201,92 @@ actor SpatialPhotoService {
         }
     }
 
+    /// Returns a spatial HEIC URL with card metadata embedded, suitable for sharing.
+    ///
+    /// Unlike `spatialPhotoURL(for:)`, this always writes metadata (IPTC/EXIF)
+    /// into the file so recipients see the card's title, creator, date, etc.
+    func shareableSpatialPhotoURL(
+        for card: StereoCard,
+        cropOverride: UserCropOverride? = nil,
+        quality: String = "v"
+    ) async throws -> URL {
+        let outputURL = cacheDirectory.appendingPathComponent(
+            "\(card.uuid)_share.heic"
+        )
+
+        // Always regenerate to ensure metadata is current
+        try? FileManager.default.removeItem(at: outputURL)
+
+        let leftDet = cropOverride?.leftDetection ?? card.leftDetection
+        let rightDet = cropOverride?.rightDetection ?? card.rightDetection
+        let metadata = SpatialPhotoMetadata(card: card)
+
+        return try await createSpatialPhoto(
+            for: card,
+            leftDetection: leftDet,
+            rightDetection: rightDet,
+            quality: quality,
+            outputURL: outputURL,
+            metadata: metadata
+        )
+    }
+
+    /// Returns the cropped left and right stereo pair as platform images.
+    ///
+    /// Useful for flat-screen stereo previews (wiggle stereoscopy, anaglyph, etc.)
+    /// where individual images are needed rather than a spatial HEIC file.
+    func croppedStereoPair(
+        for card: StereoCard,
+        cropOverride: UserCropOverride? = nil,
+        quality: String = "v"
+    ) async throws -> (left: PlatformImage, right: PlatformImage) {
+        guard let sourceURL = card.frontImageURL(quality: quality) else {
+            throw SpatialPhotoError.noFrontImage
+        }
+
+        let leftDet = cropOverride?.leftDetection ?? card.leftDetection
+        let rightDet = cropOverride?.rightDetection ?? card.rightDetection
+
+        guard leftDet.width > 0 && rightDet.width > 0 else {
+            throw SpatialPhotoError.missingDetections
+        }
+
+        let platformImage = try await pipeline.image(for: sourceURL)
+        guard let sourceImage = platformCGImage(from: platformImage) else {
+            throw SpatialPhotoError.cgImageCreationFailed
+        }
+
+        let sourceWidth = Double(sourceImage.width)
+        let sourceHeight = Double(sourceImage.height)
+        let scaleX = card.imageWidth.map { sourceWidth / $0 } ?? 1.0
+        let scaleY = card.imageHeight.map { sourceHeight / $0 } ?? 1.0
+
+        let leftCG = try cropImage(
+            sourceImage, detection: leftDet, label: "left",
+            scaleX: scaleX, scaleY: scaleY
+        )
+        let rightCG = try cropImage(
+            sourceImage, detection: rightDet, label: "right",
+            scaleX: scaleX, scaleY: scaleY
+        )
+
+        let (leftFinal, rightFinal) = matchDimensions(left: leftCG, right: rightCG)
+
+        #if canImport(UIKit)
+        let left = UIImage(cgImage: leftFinal)
+        let right = UIImage(cgImage: rightFinal)
+        #elseif canImport(AppKit)
+        let left = NSImage(cgImage: leftFinal, size: NSSize(
+            width: leftFinal.width, height: leftFinal.height
+        ))
+        let right = NSImage(cgImage: rightFinal, size: NSSize(
+            width: rightFinal.width, height: rightFinal.height
+        ))
+        #endif
+
+        return (left, right)
+    }
+
     /// Removes the cached spatial photo for a card.
     func evict(cardUUID: String) {
         let url = cacheDirectory.appendingPathComponent("\(cardUUID).heic")
@@ -189,14 +306,17 @@ actor SpatialPhotoService {
 
     private func createSpatialPhoto(
         for card: StereoCard,
+        leftDetection: ImageDetection,
+        rightDetection: ImageDetection,
         quality: String,
-        outputURL: URL
+        outputURL: URL,
+        metadata: SpatialPhotoMetadata? = nil
     ) async throws -> URL {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
         }
 
-        guard card.hasStereoDetections else {
+        guard leftDetection.width > 0 && rightDetection.width > 0 else {
             throw SpatialPhotoError.missingDetections
         }
 
@@ -224,18 +344,12 @@ actor SpatialPhotoService {
         let scaleX = card.imageWidth.map { sourceWidth / $0 } ?? 1.0
         let scaleY = card.imageHeight.map { sourceHeight / $0 } ?? 1.0
 
-        print("[SpatialDebug] Source image: \(sourceImage.width)x\(sourceImage.height)")
-        print("[SpatialDebug] Card imageWidth/Height: \(card.imageWidth ?? -1) x \(card.imageHeight ?? -1)")
-        print("[SpatialDebug] Scale factors: \(scaleX) x \(scaleY)")
-        print("[SpatialDebug] Left detection: x=\(card.leftDetection.x) y=\(card.leftDetection.y) w=\(card.leftDetection.width) h=\(card.leftDetection.height)")
-        print("[SpatialDebug] Right detection: x=\(card.rightDetection.x) y=\(card.rightDetection.y) w=\(card.rightDetection.width) h=\(card.rightDetection.height)")
-
         let leftCGImage = try cropImage(
-            sourceImage, detection: card.leftDetection, label: "left",
+            sourceImage, detection: leftDetection, label: "left",
             scaleX: scaleX, scaleY: scaleY
         )
         let rightCGImage = try cropImage(
-            sourceImage, detection: card.rightDetection, label: "right",
+            sourceImage, detection: rightDetection, label: "right",
             scaleX: scaleX, scaleY: scaleY
         )
 
@@ -248,7 +362,8 @@ actor SpatialPhotoService {
         try writeSpatialHEIC(
             leftImage: leftFinal,
             rightImage: rightFinal,
-            to: outputURL
+            to: outputURL,
+            metadata: metadata
         )
 
         logger.info("Spatial photo created: \(outputURL.lastPathComponent)")
@@ -333,7 +448,8 @@ actor SpatialPhotoService {
     private func writeSpatialHEIC(
         leftImage: CGImage,
         rightImage: CGImage,
-        to outputURL: URL
+        to outputURL: URL,
+        metadata: SpatialPhotoMetadata? = nil
     ) throws {
         // Compute spatial metadata from image dimensions
         let imageWidth = Double(leftImage.width)
@@ -359,19 +475,33 @@ actor SpatialPhotoService {
             Self.disparityAdjustmentFraction * 10000
         )
 
+        // Build optional metadata dictionaries
+        let iptcDict = metadata.map { buildIPTCDictionary(from: $0) }
+        let tiffDict = metadata.map { buildTIFFDictionary(from: $0) }
+
         // Create image properties dictionaries
-        let leftProperties = imageProperties(
+        var leftProperties = imageProperties(
             isLeft: true,
             encodedDisparityAdjustment: encodedDisparityAdjustment,
             position: leftPosition,
             intrinsics: intrinsics
         )
-        let rightProperties = imageProperties(
+        var rightProperties = imageProperties(
             isLeft: false,
             encodedDisparityAdjustment: encodedDisparityAdjustment,
             position: rightPosition,
             intrinsics: intrinsics
         )
+
+        // Embed IPTC and TIFF metadata into both images
+        if let iptc = iptcDict {
+            leftProperties[kCGImagePropertyIPTCDictionary] = iptc
+            rightProperties[kCGImagePropertyIPTCDictionary] = iptc
+        }
+        if let tiff = tiffDict {
+            leftProperties[kCGImagePropertyTIFFDictionary] = tiff
+            rightProperties[kCGImagePropertyTIFFDictionary] = tiff
+        }
 
         // Create the HEIC image destination with 2 images
         let destinationProperties: [CFString: Any] = [
@@ -407,6 +537,55 @@ actor SpatialPhotoService {
         #elseif canImport(AppKit)
         return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         #endif
+    }
+
+    /// Builds an IPTC metadata dictionary from card metadata.
+    private func buildIPTCDictionary(
+        from metadata: SpatialPhotoMetadata
+    ) -> [CFString: Any] {
+        var iptc: [CFString: Any] = [:]
+
+        if let title = metadata.title {
+            iptc[kCGImagePropertyIPTCObjectName] = title
+            iptc[kCGImagePropertyIPTCCaptionAbstract] = title
+        }
+        if let creator = metadata.creator {
+            iptc[kCGImagePropertyIPTCByline] = [creator]
+        }
+        if !metadata.subjects.isEmpty {
+            iptc[kCGImagePropertyIPTCKeywords] = metadata.subjects
+        }
+        if let place = metadata.places.first {
+            iptc[kCGImagePropertyIPTCContentLocationName] = place
+        }
+        if let source = metadata.source {
+            iptc[kCGImagePropertyIPTCSource] = source
+            iptc[kCGImagePropertyIPTCCredit] = source
+        }
+        if let copyright = metadata.copyright {
+            iptc[kCGImagePropertyIPTCCopyrightNotice] = copyright
+        }
+
+        return iptc
+    }
+
+    /// Builds a TIFF metadata dictionary from card metadata.
+    private func buildTIFFDictionary(
+        from metadata: SpatialPhotoMetadata
+    ) -> [CFString: Any] {
+        var tiff: [CFString: Any] = [:]
+
+        if let title = metadata.title {
+            tiff[kCGImagePropertyTIFFImageDescription] = title
+        }
+        if let creator = metadata.creator {
+            tiff[kCGImagePropertyTIFFArtist] = creator
+        }
+        if let copyright = metadata.copyright {
+            tiff[kCGImagePropertyTIFFCopyright] = copyright
+        }
+
+        return tiff
     }
 
     /// Builds the properties dictionary for one image in the stereo pair.

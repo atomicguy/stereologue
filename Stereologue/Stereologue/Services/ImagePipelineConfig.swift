@@ -16,7 +16,7 @@ extension ImagePipeline {
     /// - 500 MB disk cache (persistent across launches)
     /// - Deduplication enabled (avoids redundant downloads for the same URL)
     /// - Progressive decoding disabled (NYPL IIIF returns complete JPEGs)
-    static let stereologue: ImagePipeline = {
+    nonisolated(unsafe) static let stereologue: ImagePipeline = {
         var config = ImagePipeline.Configuration()
 
         // Memory cache: ~100 MB
