@@ -164,7 +164,8 @@ struct SpatialPhotoView: View {
                     .frame(maxWidth: 800)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
-                    .glassBackgroundEffect()
+                    .background(Color("CardTint"))
+                .glassBackgroundEffect()
             }
         }
     }
@@ -257,6 +258,7 @@ struct SpatialPhotoView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        .background(Color("CardTint"))
         .glassBackgroundEffect()
     }
 

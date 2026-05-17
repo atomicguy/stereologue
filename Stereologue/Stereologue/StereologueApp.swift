@@ -138,6 +138,7 @@ struct StereologueApp: App {
                 .environment(spatialPhotoViewModel)
         }
         .defaultSize(width: 1280, height: 720)
+        .windowStyle(.plain)
         #endif
     }
 }
