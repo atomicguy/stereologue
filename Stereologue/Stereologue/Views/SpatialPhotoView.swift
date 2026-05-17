@@ -11,6 +11,7 @@
 #if os(visionOS)
 
 import SwiftUI
+import SwiftData
 import RealityKit
 import NukeUI
 import OSLog
@@ -28,7 +29,10 @@ struct SpatialPhotoView: View {
 
     @State private var spatialPhotoURL: URL?
     @State private var isLoading = false
+    @State private var isRestoring = false
+    @State private var currentStyle: RestorationStyle?
     @State private var displayedCardUUID: String?
+    @State private var useFadeTransition = false
 
     var body: some View {
         GeometryReader3D { geometry in
@@ -36,8 +40,8 @@ struct SpatialPhotoView: View {
                 // Spatial photo with push transition
                 if let spatialPhotoURL {
                     spatialPhotoContent(url: spatialPhotoURL, geometry: geometry)
-                        .id(displayedCardUUID)
-                        .transition(pushTransition)
+                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")")
+                        .transition(photoTransition)
                 } else if isLoading {
                     ProgressView()
                         .scaleEffect(1.5)
@@ -50,30 +54,17 @@ struct SpatialPhotoView: View {
             contentAlignment: .init(horizontal: .center, vertical: .bottom, depth: .front)
         ) {
             titleOrnament
-                .padding(.bottom, 40)
+                .padding(.bottom, 80)
+                .offset(z: 80)
         }
         .ornament(
             attachmentAnchor: .scene(.bottom),
             contentAlignment: .init(horizontal: .center, vertical: .top, depth: .front)
         ) {
             thumbnailStripOrnament
-                .padding(.top, 40)
+                .padding(.top, 100)
+                .offset(z: 200)
         }
-        .gesture(
-            DragGesture(minimumDistance: 50)
-                .onEnded { value in
-                    let horizontal = value.translation.width
-                    if horizontal < -50 && viewModel.hasNext {
-                        withAnimation(.easeInOut(duration: 0.35)) {
-                            viewModel.goToNext()
-                        }
-                    } else if horizontal > 50 && viewModel.hasPrevious {
-                        withAnimation(.easeInOut(duration: 0.35)) {
-                            viewModel.goToPrevious()
-                        }
-                    }
-                }
-        )
         .task(id: viewModel.currentCardUUID) {
             await loadSpatialPhoto()
         }
@@ -96,6 +87,10 @@ struct SpatialPhotoView: View {
                 )
                 component.desiredViewingMode = .spatialStereo
                 entity.components.set(component)
+
+                entity.components.set(InputTargetComponent(allowedInputTypes: .indirect))
+                entity.components.set(CollisionComponent(shapes: [.generateBox(size: SIMD3(2, 2, 0.01))]))
+
                 content.add(entity)
             } catch {
                 logger.error(
@@ -119,11 +114,30 @@ struct SpatialPhotoView: View {
             entity.scale = SIMD3<Float>(scale, scale, 1.0)
             entity.position.z = 0
         }
+        .gesture(
+            DragGesture()
+                .targetedToAnyEntity()
+                .onEnded { value in
+                    let horizontal = value.translation.width
+                    if horizontal < -50 && viewModel.hasNext {
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            viewModel.goToNext()
+                        }
+                    } else if horizontal > 50 && viewModel.hasPrevious {
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            viewModel.goToPrevious()
+                        }
+                    }
+                }
+        )
     }
 
-    // MARK: - Push Transition
+    // MARK: - Photo Transition
 
-    private var pushTransition: AnyTransition {
+    private var photoTransition: AnyTransition {
+        if useFadeTransition {
+            return .opacity
+        }
         switch viewModel.navigationDirection {
         case .forward:
             return .asymmetric(
@@ -206,6 +220,34 @@ struct SpatialPhotoView: View {
                 .frame(height: 40)
                 .padding(.horizontal, 12)
 
+            if isRestoring {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Menu {
+                    Picker("Restoration", selection: Binding(
+                        get: { currentStyle },
+                        set: { newStyle in
+                            Task { await applyStyle(newStyle) }
+                        }
+                    )) {
+                        Text("Original").tag(RestorationStyle?.none)
+                        ForEach(RestorationStyle.allCases) { style in
+                            Text(style.displayName).tag(RestorationStyle?.some(style))
+                        }
+                    }
+                } label: {
+                    Image(systemName: currentStyle != nil ? "wand.and.stars" : "wand.and.stars.inverse")
+                        .font(.title3)
+                        .foregroundStyle(currentStyle != nil ? .yellow : .primary)
+                }
+                .disabled(isLoading)
+            }
+
+            Divider()
+                .frame(height: 40)
+                .padding(.horizontal, 12)
+
             Button {
                 viewModel.dismiss()
             } label: {
@@ -250,15 +292,19 @@ struct SpatialPhotoView: View {
     private func loadSpatialPhoto() async {
         guard let card = viewModel.currentCard,
               card.hasStereoDetections else { return }
+        let cardData = card.spatialPhotoData()
+        let cardUUID = card.uuid
 
         isLoading = true
-        spatialPhotoURL = nil
+        useFadeTransition = false
 
         do {
-            let url = try await spatialPhotoService.spatialPhotoURL(for: card)
+            let url = try await spatialPhotoService.spatialPhotoURL(
+                for: cardData, style: currentStyle
+            )
             withAnimation(.easeInOut(duration: 0.35)) {
                 spatialPhotoURL = url
-                displayedCardUUID = card.uuid
+                displayedCardUUID = cardUUID
             }
             prefetchAdjacent()
         } catch {
@@ -267,15 +313,63 @@ struct SpatialPhotoView: View {
         isLoading = false
     }
 
+    private func applyStyle(_ style: RestorationStyle?) async {
+        guard let card = viewModel.currentCard,
+              card.hasStereoDetections else { return }
+        let cardData = card.spatialPhotoData()
+        let cardUUID = card.uuid
+
+        isRestoring = true
+
+        do {
+            let url = try await spatialPhotoService.spatialPhotoURL(
+                for: cardData,
+                style: style
+            )
+            useFadeTransition = true
+            withAnimation(.easeInOut(duration: 0.35)) {
+                spatialPhotoURL = url
+                displayedCardUUID = cardUUID
+                currentStyle = style
+            }
+        } catch {
+            logger.error("Failed to create spatial photo: \(error.localizedDescription)")
+        }
+        isRestoring = false
+    }
+
     private func prefetchAdjacent() {
         guard let idx = viewModel.currentIndex else { return }
-        var adjacent: [StereoCard] = []
-        if idx > 0 { adjacent.append(viewModel.cards[idx - 1]) }
-        if idx < viewModel.cards.count - 1 { adjacent.append(viewModel.cards[idx + 1]) }
+        var adjacent: [SpatialPhotoCardData] = []
+        if idx > 0 { adjacent.append(viewModel.cards[idx - 1].spatialPhotoData()) }
+        if idx < viewModel.cards.count - 1 {
+            adjacent.append(viewModel.cards[idx + 1].spatialPhotoData())
+        }
+        let style = currentStyle
         Task {
-            await spatialPhotoService.prefetch(cards: adjacent)
+            await spatialPhotoService.prefetch(cards: adjacent, style: style)
         }
     }
 }
+
+// MARK: - Preview
+
+#if DEBUG
+@MainActor
+private func makePreviewViewModel() -> SpatialPhotoViewModel {
+    let vm = SpatialPhotoViewModel()
+    let cards = PreviewSampleData.sampleCards
+    if let first = cards.first {
+        vm.present(cards: cards, initialCardUUID: first.uuid)
+    }
+    return vm
+}
+
+#Preview(windowStyle: .plain) {
+    SpatialPhotoView(spatialPhotoService: SpatialPhotoService())
+        .environment(makePreviewViewModel())
+        .modelContainer(PreviewSampleData.container)
+}
+#endif
 
 #endif

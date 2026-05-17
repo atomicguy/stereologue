@@ -22,7 +22,9 @@ struct ImageDetection: Codable, Hashable, Sendable {
     var width: Double
     var height: Double
 
-    init(
+    // `nonisolated` so this initializer is callable from the SwiftData
+    // macro-generated nonisolated context that owns `@Model` synthesis.
+    nonisolated init(
         detectionID: String = "",
         classification: String = "",
         confidence: Double = 0,

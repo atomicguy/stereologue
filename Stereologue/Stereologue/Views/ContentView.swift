@@ -13,10 +13,8 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(UserDataService.self) private var userDataService
-    @Environment(\.modelContext) private var catalogContext
 
     @State private var selectedTab: AppTab = .library
-    @State private var albums: [UserAlbum] = []
     @State private var cardListContext = CardListContext()
 
     var body: some View {
@@ -77,8 +75,12 @@ struct ContentView: View {
             }
 
             // MARK: - Albums
+            // Album tabs reflect `userDataService.albums`, which is reactively
+            // refreshed via a SwiftData `didSave` observer on the user
+            // container — so new/renamed/deleted albums update the tab bar
+            // without manual refreshes.
             TabSection("Albums") {
-                ForEach(albums, id: \.id) { album in
+                ForEach(userDataService.albums, id: \.id) { album in
                     Tab(album.name, systemImage: "rectangle.stack", value: AppTab.album(album.id)) {
                         NavigationStack {
                             AlbumDetailView(album: album)
@@ -91,7 +93,6 @@ struct ContentView: View {
             .sectionActions {
                 Button("New Album", systemImage: "plus") {
                     _ = userDataService.createAlbum(name: "New Album")
-                    refreshAlbums()
                 }
             }
 
@@ -102,12 +103,7 @@ struct ContentView: View {
         #endif
         .fontDesign(.serif)
         .environment(cardListContext)
-        .onAppear { refreshAlbums() }
         .userDataErrorAlert()
-    }
-
-    private func refreshAlbums() {
-        albums = userDataService.allAlbums()
     }
 }
 

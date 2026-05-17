@@ -24,7 +24,12 @@ enum PreviewSampleData {
             Collection.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        let container = try! ModelContainer(for: schema, configurations: config)
+        let container: ModelContainer
+        do {
+            container = try ModelContainer(for: schema, configurations: config)
+        } catch {
+            fatalError("PreviewSampleData: failed to build in-memory catalog container — \(error)")
+        }
         let context = container.mainContext
 
         // Creators
@@ -104,7 +109,11 @@ enum PreviewSampleData {
             UserNote.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try! ModelContainer(for: schema, configurations: config)
+        do {
+            return try ModelContainer(for: schema, configurations: config)
+        } catch {
+            fatalError("PreviewSampleData: failed to build in-memory user container — \(error)")
+        }
     }()
 
     static let userDataService: UserDataService = {
@@ -113,34 +122,54 @@ enum PreviewSampleData {
 
     // MARK: - Sample Object Accessors
 
+    private static func firstSample<T: PersistentModel>(_ type: T.Type) -> T {
+        do {
+            guard let first = try container.mainContext.fetch(FetchDescriptor<T>()).first else {
+                fatalError("PreviewSampleData: no \(type) seeded — sample data setup is broken")
+            }
+            return first
+        } catch {
+            fatalError("PreviewSampleData: failed to fetch \(type) — \(error)")
+        }
+    }
+
     static var sampleCard: StereoCard {
-        try! container.mainContext.fetch(FetchDescriptor<StereoCard>()).first!
+        firstSample(StereoCard.self)
     }
 
     static var sampleCards: [StereoCard] {
-        try! container.mainContext.fetch(FetchDescriptor<StereoCard>())
+        do {
+            return try container.mainContext.fetch(FetchDescriptor<StereoCard>())
+        } catch {
+            fatalError("PreviewSampleData: failed to fetch StereoCards — \(error)")
+        }
     }
 
     static var sampleCreator: Creator {
-        try! container.mainContext.fetch(FetchDescriptor<Creator>()).first!
+        firstSample(Creator.self)
     }
 
     static var sampleSubject: Subject {
-        try! container.mainContext.fetch(FetchDescriptor<Subject>()).first!
+        firstSample(Subject.self)
     }
 
     static var samplePlace: Place {
-        try! container.mainContext.fetch(FetchDescriptor<Place>()).first!
+        firstSample(Place.self)
     }
 
     static var sampleCollection: Collection {
-        try! container.mainContext.fetch(FetchDescriptor<Collection>()).first!
+        firstSample(Collection.self)
     }
 
     static var sampleAlbum: UserAlbum {
         let context = userContainer.mainContext
-        let albums = try! context.fetch(FetchDescriptor<UserAlbum>())
-        if let album = albums.first { return album }
+        let existing: [UserAlbum]
+        do {
+            existing = try context.fetch(FetchDescriptor<UserAlbum>())
+        } catch {
+            fatalError("PreviewSampleData: failed to fetch UserAlbums — \(error)")
+        }
+        if let album = existing.first { return album }
         let album = UserAlbum(name: "My Collection")
         context.insert(album)
         return album

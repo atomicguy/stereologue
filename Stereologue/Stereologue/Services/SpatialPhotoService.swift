@@ -22,6 +22,45 @@ import UIKit
 import AppKit
 #endif
 
+/// Sendable snapshot of the catalog/user data needed to render a spatial photo.
+///
+/// `SpatialPhotoService` is an actor and `StereoCard` / `UserCropOverride` are
+/// `@Model` classes bound to MainActor — those models can't safely cross
+/// actor boundaries. Callers build this snapshot on MainActor (resolving any
+/// crop override in the process), then hand it to the service.
+nonisolated struct SpatialPhotoCardData: Sendable {
+    let uuid: String
+    let frontImageID: String?
+    let leftDetection: ImageDetection
+    let rightDetection: ImageDetection
+    let imageWidth: Double?
+    let imageHeight: Double?
+
+    var hasStereoDetections: Bool {
+        leftDetection.width > 0 && rightDetection.width > 0
+    }
+
+    func frontImageURL(quality: String) -> URL? {
+        guard let id = frontImageID else { return nil }
+        return URL(string: "https://iiif-prod.nypl.org/index.php?id=\(id)&t=\(quality)")
+    }
+}
+
+extension StereoCard {
+    /// Builds a Sendable snapshot suitable for passing to `SpatialPhotoService`.
+    /// Resolves an optional user crop override into the effective detections.
+    func spatialPhotoData(cropOverride: UserCropOverride? = nil) -> SpatialPhotoCardData {
+        SpatialPhotoCardData(
+            uuid: uuid,
+            frontImageID: frontImageID,
+            leftDetection: cropOverride?.leftDetection ?? leftDetection,
+            rightDetection: cropOverride?.rightDetection ?? rightDetection,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight
+        )
+    }
+}
+
 /// Metadata to embed in spatial HEIC files for sharing.
 struct SpatialPhotoMetadata {
     var title: String?
@@ -32,12 +71,18 @@ struct SpatialPhotoMetadata {
     var source: String?
     var copyright: String?
 
-    init(card: StereoCard) {
-        self.title = card.title
-        self.creator = card.creator?.name
-        self.date = card.displayDate
-        self.subjects = card.subjects.map(\.name)
-        self.places = card.places.map(\.name)
+    nonisolated init(
+        title: String?,
+        creator: String?,
+        date: String?,
+        subjects: [String],
+        places: [String]
+    ) {
+        self.title = title
+        self.creator = creator
+        self.date = date
+        self.subjects = subjects
+        self.places = places
         self.source = "The New York Public Library"
         self.copyright = "No known U.S. copyright restrictions"
     }
@@ -93,6 +138,12 @@ actor SpatialPhotoService {
     /// In-flight conversion tasks, keyed by card UUID, to avoid duplicate work.
     private var inFlightTasks: [String: Task<URL, Error>] = [:]
 
+    /// Corrects vertical misalignment between stereo pairs.
+    private let rectificationService = StereoRectificationService()
+
+    /// Tone and contrast restoration for scanned prints.
+    private let restorationPipeline = RestorationPipeline()
+
     // MARK: - Stereoview Camera Defaults
 
     /// Baseline (interaxial distance) in meters.
@@ -139,46 +190,43 @@ actor SpatialPhotoService {
     /// are coalesced into a single download/conversion.
     ///
     /// - Parameters:
-    ///   - card: The stereo card to convert.
-    ///   - cropOverride: Optional user-edited crop override. When provided,
-    ///     its detections are used instead of the card's ML detections.
+    ///   - card: Sendable card snapshot. Build with `card.spatialPhotoData(cropOverride:)` on MainActor.
     ///   - quality: IIIF quality code for the source image (default "v" = 2560px).
     /// - Returns: File URL of the generated spatial HEIC.
     func spatialPhotoURL(
-        for card: StereoCard,
-        cropOverride: UserCropOverride? = nil,
-        quality: String = "v"
+        for card: SpatialPhotoCardData,
+        quality: String = "v",
+        style: RestorationStyle? = nil
     ) async throws -> URL {
+        let suffix = style.map { "_restored_\($0.rawValue)" } ?? ""
         let outputURL = cacheDirectory.appendingPathComponent(
-            "\(card.uuid).heic"
+            "\(card.uuid)\(suffix).heic"
         )
 
         // Return cached file if it exists
         if FileManager.default.fileExists(atPath: outputURL.path) {
-            logger.debug("Cache hit for spatial photo: \(card.uuid)")
+            logger.debug("Cache hit for spatial photo: \(card.uuid)\(suffix)")
             return outputURL
         }
 
+        let cacheKey = "\(card.uuid)\(suffix)"
+
         // Coalesce concurrent requests for the same card
-        if let existingTask = inFlightTasks[card.uuid] {
+        if let existingTask = inFlightTasks[cacheKey] {
             return try await existingTask.value
         }
 
-        let leftDet = cropOverride?.leftDetection ?? card.leftDetection
-        let rightDet = cropOverride?.rightDetection ?? card.rightDetection
-
         let task = Task<URL, Error> {
-            defer { inFlightTasks[card.uuid] = nil }
+            defer { inFlightTasks[cacheKey] = nil }
             return try await createSpatialPhoto(
                 for: card,
-                leftDetection: leftDet,
-                rightDetection: rightDet,
                 quality: quality,
-                outputURL: outputURL
+                outputURL: outputURL,
+                style: style
             )
         }
 
-        inFlightTasks[card.uuid] = task
+        inFlightTasks[cacheKey] = task
         return try await task.value
     }
 
@@ -186,12 +234,18 @@ actor SpatialPhotoService {
     ///
     /// Starts downloading and converting in the background. Failures are
     /// logged but not thrown, since this is a best-effort optimization.
-    func prefetch(cards: [StereoCard], quality: String = "v") {
+    func prefetch(
+        cards: [SpatialPhotoCardData],
+        quality: String = "v",
+        style: RestorationStyle? = nil
+    ) {
         for card in cards {
             guard card.hasStereoDetections else { continue }
             Task {
                 do {
-                    _ = try await spatialPhotoURL(for: card, quality: quality)
+                    _ = try await spatialPhotoURL(
+                        for: card, quality: quality, style: style
+                    )
                 } catch {
                     logger.warning(
                         "Prefetch failed for \(card.uuid): \(error.localizedDescription)"
@@ -205,9 +259,10 @@ actor SpatialPhotoService {
     ///
     /// Unlike `spatialPhotoURL(for:)`, this always writes metadata (IPTC/EXIF)
     /// into the file so recipients see the card's title, creator, date, etc.
+    /// The metadata must be built on MainActor by the caller.
     func shareableSpatialPhotoURL(
-        for card: StereoCard,
-        cropOverride: UserCropOverride? = nil,
+        for card: SpatialPhotoCardData,
+        metadata: SpatialPhotoMetadata,
         quality: String = "v"
     ) async throws -> URL {
         let outputURL = cacheDirectory.appendingPathComponent(
@@ -217,14 +272,8 @@ actor SpatialPhotoService {
         // Always regenerate to ensure metadata is current
         try? FileManager.default.removeItem(at: outputURL)
 
-        let leftDet = cropOverride?.leftDetection ?? card.leftDetection
-        let rightDet = cropOverride?.rightDetection ?? card.rightDetection
-        let metadata = SpatialPhotoMetadata(card: card)
-
         return try await createSpatialPhoto(
             for: card,
-            leftDetection: leftDet,
-            rightDetection: rightDet,
             quality: quality,
             outputURL: outputURL,
             metadata: metadata
@@ -236,20 +285,20 @@ actor SpatialPhotoService {
     /// Useful for flat-screen stereo previews (wiggle stereoscopy, anaglyph, etc.)
     /// where individual images are needed rather than a spatial HEIC file.
     func croppedStereoPair(
-        for card: StereoCard,
-        cropOverride: UserCropOverride? = nil,
-        quality: String = "v"
+        for card: SpatialPhotoCardData,
+        quality: String = "v",
+        style: RestorationStyle? = nil
     ) async throws -> (left: PlatformImage, right: PlatformImage) {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
         }
 
-        let leftDet = cropOverride?.leftDetection ?? card.leftDetection
-        let rightDet = cropOverride?.rightDetection ?? card.rightDetection
-
-        guard leftDet.width > 0 && rightDet.width > 0 else {
+        guard card.hasStereoDetections else {
             throw SpatialPhotoError.missingDetections
         }
+
+        let leftDet = card.leftDetection
+        let rightDet = card.rightDetection
 
         let platformImage = try await pipeline.image(for: sourceURL)
         guard let sourceImage = platformCGImage(from: platformImage) else {
@@ -261,14 +310,32 @@ actor SpatialPhotoService {
         let scaleX = card.imageWidth.map { sourceWidth / $0 } ?? 1.0
         let scaleY = card.imageHeight.map { sourceHeight / $0 } ?? 1.0
 
-        let leftCG = try cropImage(
+        var leftCG = try cropImage(
             sourceImage, detection: leftDet, label: "left",
             scaleX: scaleX, scaleY: scaleY
         )
-        let rightCG = try cropImage(
+        var rightCG = try cropImage(
             sourceImage, detection: rightDet, label: "right",
             scaleX: scaleX, scaleY: scaleY
         )
+
+        if let style {
+            leftCG = await restorationPipeline.restore(leftCG, style: style)
+            rightCG = await restorationPipeline.restore(rightCG, style: style)
+        }
+
+        // Rectify vertical misalignment
+        do {
+            let rectified = try await rectificationService.rectify(
+                left: leftCG, right: rightCG
+            )
+            leftCG = rectified.left
+            rightCG = rectified.right
+        } catch {
+            logger.warning(
+                "Stereo rectification failed: \(error.localizedDescription)"
+            )
+        }
 
         let (leftFinal, rightFinal) = matchDimensions(left: leftCG, right: rightCG)
 
@@ -305,20 +372,22 @@ actor SpatialPhotoService {
     // MARK: - Spatial HEIC Creation
 
     private func createSpatialPhoto(
-        for card: StereoCard,
-        leftDetection: ImageDetection,
-        rightDetection: ImageDetection,
+        for card: SpatialPhotoCardData,
         quality: String,
         outputURL: URL,
-        metadata: SpatialPhotoMetadata? = nil
+        metadata: SpatialPhotoMetadata? = nil,
+        style: RestorationStyle? = nil
     ) async throws -> URL {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
         }
 
-        guard leftDetection.width > 0 && rightDetection.width > 0 else {
+        guard card.hasStereoDetections else {
             throw SpatialPhotoError.missingDetections
         }
+
+        let leftDetection = card.leftDetection
+        let rightDetection = card.rightDetection
 
         logger.info("Creating spatial photo for \(card.uuid)")
 
@@ -344,21 +413,40 @@ actor SpatialPhotoService {
         let scaleX = card.imageWidth.map { sourceWidth / $0 } ?? 1.0
         let scaleY = card.imageHeight.map { sourceHeight / $0 } ?? 1.0
 
-        let leftCGImage = try cropImage(
+        var leftCGImage = try cropImage(
             sourceImage, detection: leftDetection, label: "left",
             scaleX: scaleX, scaleY: scaleY
         )
-        let rightCGImage = try cropImage(
+        var rightCGImage = try cropImage(
             sourceImage, detection: rightDetection, label: "right",
             scaleX: scaleX, scaleY: scaleY
         )
 
-        // 3. Resize to matching dimensions (required for spatial photos)
+        // 3. Optionally restore tone and contrast
+        if let style {
+            leftCGImage = await restorationPipeline.restore(leftCGImage, style: style)
+            rightCGImage = await restorationPipeline.restore(rightCGImage, style: style)
+        }
+
+        // 4. Rectify vertical misalignment between the stereo pair
+        do {
+            let rectified = try await rectificationService.rectify(
+                left: leftCGImage, right: rightCGImage
+            )
+            leftCGImage = rectified.left
+            rightCGImage = rectified.right
+        } catch {
+            logger.warning(
+                "Stereo rectification failed, continuing without: \(error.localizedDescription)"
+            )
+        }
+
+        // 5. Resize to matching dimensions (required for spatial photos)
         let (leftFinal, rightFinal) = matchDimensions(
             left: leftCGImage, right: rightCGImage
         )
 
-        // 4. Write spatial HEIC
+        // 6. Write spatial HEIC
         try writeSpatialHEIC(
             leftImage: leftFinal,
             rightImage: rightFinal,
@@ -396,7 +484,7 @@ actor SpatialPhotoService {
             height: scaledH
         )
 
-        print("[SpatialDebug] \(label) cropRect: \(cropRect)")
+        logger.debug("\(label) cropRect: \(cropRect.debugDescription)")
 
         // Clamp to image bounds
         let imageBounds = CGRect(

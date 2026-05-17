@@ -100,16 +100,26 @@ struct CardDetailView: View {
 
     private func generateAndShare() {
         guard let service = spatialPhotoService else { return }
+        // Snapshot all model data on MainActor before crossing the actor boundary.
+        let cardData = card.spatialPhotoData(cropOverride: cropOverride)
+        let metadata = SpatialPhotoMetadata(
+            title: card.title,
+            creator: card.creator?.name,
+            date: card.displayDate,
+            subjects: card.subjects.map(\.name),
+            places: card.places.map(\.name)
+        )
+        let shareTitle = card.title
         isGeneratingShare = true
         Task {
             do {
                 let cacheURL = try await service.shareableSpatialPhotoURL(
-                    for: card,
-                    cropOverride: cropOverride
+                    for: cardData,
+                    metadata: metadata
                 )
                 // Copy to temp directory with a descriptive filename
                 // so the share system can access it and Photos recognizes the type
-                let safeName = card.title
+                let safeName = shareTitle
                     .replacingOccurrences(of: "/", with: "-")
                     .prefix(80)
                 let tempDir = FileManager.default.temporaryDirectory

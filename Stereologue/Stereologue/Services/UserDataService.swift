@@ -37,11 +37,26 @@ final class UserDataService {
 
     private let userContext: ModelContext
     private let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "UserData")
-    
+
     /// The most recent error that occurred, if any.
     /// Views can observe this to show error alerts.
     private(set) var lastError: UserDataError?
-    
+
+    /// Albums, sorted most-recently-updated first. Kept in sync with the user
+    /// container via SwiftData's `didSave` notification, so SwiftUI views that
+    /// read this property re-render whenever albums change — including from
+    /// CloudKit sync.
+    ///
+    /// `@Query` would be the natural fit here, but `@Query` reads from
+    /// `\.modelContext`, which this app reserves for the *catalog* container.
+    /// The user container lives behind `\.userModelContext`, so this service
+    /// publishes the reactive list itself.
+    private(set) var albums: [UserAlbum] = []
+
+    /// Held only so it's discoverable; the observer is never torn down because
+    /// `UserDataService` lives for the entire app lifetime.
+    private var didSaveObservation: NSObjectProtocol?
+
     /// Clears the last error. Call this after displaying an error to the user.
     func clearLastError() {
         lastError = nil
@@ -49,6 +64,28 @@ final class UserDataService {
 
     init(userContext: ModelContext) {
         self.userContext = userContext
+        refreshAlbums()
+        didSaveObservation = NotificationCenter.default.addObserver(
+            forName: ModelContext.didSave,
+            object: userContext,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshAlbums()
+            }
+        }
+    }
+
+    private func refreshAlbums() {
+        do {
+            let descriptor = FetchDescriptor<UserAlbum>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+            albums = try userContext.fetch(descriptor)
+        } catch {
+            logger.error("Failed to refresh albums: \(error)")
+            lastError = .fetchFailed("albums", error)
+        }
     }
 
     // MARK: - Favorites
@@ -205,19 +242,6 @@ final class UserDataService {
     }
 
     // MARK: - Albums
-
-    func allAlbums() -> [UserAlbum] {
-        do {
-            let descriptor = FetchDescriptor<UserAlbum>(
-                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-            )
-            return try userContext.fetch(descriptor)
-        } catch {
-            logger.error("Failed to fetch albums: \(error)")
-            lastError = .fetchFailed("albums", error)
-            return []
-        }
-    }
 
     func createAlbum(name: String) -> UserAlbum {
         let album = UserAlbum(name: name)
