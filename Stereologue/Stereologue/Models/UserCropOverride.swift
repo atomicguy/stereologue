@@ -12,8 +12,10 @@ import SwiftData
 @Model
 final class UserCropOverride {
 
-    #Unique<UserCropOverride>([\.cardUUID])
-
+    // No `#Unique` on `cardUUID`: CloudKit-backed stores reject unique
+    // constraints, and this model is CloudKit-ready. Uniqueness is enforced in
+    // code — `UserDataService.saveCropOverride` upserts, and `cropOverride(for:)`
+    // reconciles any duplicates a sync merge might introduce.
     var id: UUID = UUID()
     var cardUUID: String = ""
     var leftDetection: ImageDetection = ImageDetection()

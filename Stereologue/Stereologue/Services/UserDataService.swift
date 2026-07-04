@@ -188,9 +188,19 @@ final class UserDataService {
     func cropOverride(for cardUUID: String) -> UserCropOverride? {
         do {
             let descriptor = FetchDescriptor<UserCropOverride>(
-                predicate: #Predicate { $0.cardUUID == cardUUID }
+                predicate: #Predicate { $0.cardUUID == cardUUID },
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
             )
-            return try userContext.fetch(descriptor).first
+            let matches = try userContext.fetch(descriptor)
+            // With no DB-level unique constraint (unsupported under CloudKit),
+            // a sync merge can produce duplicates. Keep the newest and drop the
+            // rest; the deletes persist on the next save.
+            if matches.count > 1 {
+                for duplicate in matches.dropFirst() {
+                    userContext.delete(duplicate)
+                }
+            }
+            return matches.first
         } catch {
             logger.error("Failed to fetch crop override for \(cardUUID): \(error)")
             lastError = .fetchFailed("crop override", error)

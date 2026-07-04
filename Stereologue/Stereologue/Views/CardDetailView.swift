@@ -12,31 +12,29 @@ import NukeUI
 struct CardDetailView: View {
     let card: StereoCard
     @Environment(UserDataService.self) private var userDataService
-    @Environment(\.spatialPhotoService) private var spatialPhotoService
 
     @State private var noteText = ""
     @State private var notes: [UserNote] = []
     @State private var showDetections = false
     @State private var showCropEditor = false
     @State private var cropOverride: UserCropOverride?
-    @State private var shareItem: URL?
-    @State private var isGeneratingShare = false
-    @State private var shareError: String?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Hero front image — no horizontal padding so it extends under sidebar
-                frontImageSection
-
+            VStack(alignment: .leading, spacing: 28) {
                 // Title
                 Text(card.title)
                     .font(.title2.bold())
                     .padding(.horizontal)
 
+                // Hero front image — no horizontal padding so it extends under sidebar
+                frontImageSection
+                    .padding(.horizontal, cardImageHorizontalPadding)
+
                 // Back image
                 if card.backImageID != nil {
                     backImageSection
+                        .padding(.horizontal, cardImageHorizontalPadding)
                 }
 
                 // Metadata
@@ -50,44 +48,12 @@ struct CardDetailView: View {
 
                 Spacer(minLength: 40)
             }
+            .padding(.top, 12)
         }
         .fontDesign(.serif)
         .onAppear {
             notes = userDataService.notes(for: card.uuid)
             cropOverride = userDataService.cropOverride(for: card.uuid)
-        }
-        .toolbar {
-            if card.hasStereoDetections {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        generateAndShare()
-                    } label: {
-                        if isGeneratingShare {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Label("Share Spatial Photo", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                    .disabled(isGeneratingShare || spatialPhotoService == nil)
-                }
-            }
-        }
-        .sheet(isPresented: .init(
-            get: { shareItem != nil },
-            set: { if !$0 { shareItem = nil } }
-        )) {
-            if let url = shareItem {
-                ShareSheet(items: [url])
-            }
-        }
-        .alert("Share Error", isPresented: .init(
-            get: { shareError != nil },
-            set: { if !$0 { shareError = nil } }
-        )) {
-            Button("OK") { shareError = nil }
-        } message: {
-            Text(shareError ?? "")
         }
         .sheet(isPresented: $showCropEditor) {
             cropOverride = userDataService.cropOverride(for: card.uuid)
@@ -96,49 +62,15 @@ struct CardDetailView: View {
         }
     }
 
-    // MARK: - Sharing
-
-    private func generateAndShare() {
-        guard let service = spatialPhotoService else { return }
-        // Snapshot all model data on MainActor before crossing the actor boundary.
-        let cardData = card.spatialPhotoData(cropOverride: cropOverride)
-        let metadata = SpatialPhotoMetadata(
-            title: card.title,
-            creator: card.creator?.name,
-            date: card.displayDate,
-            subjects: card.subjects.map(\.name),
-            places: card.places.map(\.name)
-        )
-        let shareTitle = card.title
-        isGeneratingShare = true
-        Task {
-            do {
-                let cacheURL = try await service.shareableSpatialPhotoURL(
-                    for: cardData,
-                    metadata: metadata
-                )
-                // Copy to temp directory with a descriptive filename
-                // so the share system can access it and Photos recognizes the type
-                let safeName = shareTitle
-                    .replacingOccurrences(of: "/", with: "-")
-                    .prefix(80)
-                let tempDir = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("SharePhotos", isDirectory: true)
-                try? FileManager.default.createDirectory(
-                    at: tempDir, withIntermediateDirectories: true
-                )
-                let shareURL = tempDir.appendingPathComponent("\(safeName).heic")
-                try? FileManager.default.removeItem(at: shareURL)
-                try FileManager.default.copyItem(at: cacheURL, to: shareURL)
-                shareItem = shareURL
-            } catch {
-                shareError = error.localizedDescription
-            }
-            isGeneratingShare = false
-        }
-    }
-
     // MARK: - Front Image
+
+    private var cardImageHorizontalPadding: CGFloat {
+        #if os(visionOS)
+        return 20
+        #else
+        return 0
+        #endif
+    }
 
     private var hasDetections: Bool {
         card.leftDetection.width > 0 || card.rightDetection.width > 0
@@ -378,84 +310,6 @@ struct CardDetailView: View {
             }
     }
 }
-
-// MARK: - Share Sheet
-
-import UniformTypeIdentifiers
-
-#if canImport(UIKit)
-import UIKit
-
-private struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        // Wrap file URLs in a type-aware item provider so the share system
-        // recognizes the HEIC as an image and offers Photos, AirDrop, etc.
-        let activityItems: [Any] = items.map { item in
-            if let url = item as? URL, url.isFileURL {
-                return SpatialPhotoItemProvider(fileURL: url) as Any
-            }
-            return item
-        }
-        return UIActivityViewController(
-            activityItems: activityItems,
-            applicationActivities: nil
-        )
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-/// Custom item provider that declares HEIC type so Photos and other image-aware
-/// share targets appear in the activity view.
-private final class SpatialPhotoItemProvider: NSObject,
-    UIActivityItemSource
-{
-    let fileURL: URL
-
-    init(fileURL: URL) {
-        self.fileURL = fileURL
-    }
-
-    func activityViewControllerPlaceholderItem(
-        _ activityViewController: UIActivityViewController
-    ) -> Any {
-        fileURL
-    }
-
-    func activityViewController(
-        _ activityViewController: UIActivityViewController,
-        itemForActivityType activityType: UIActivity.ActivityType?
-    ) -> Any? {
-        fileURL
-    }
-
-    func activityViewController(
-        _ activityViewController: UIActivityViewController,
-        dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?
-    ) -> String {
-        UTType.heic.identifier
-    }
-}
-#elseif canImport(AppKit)
-import AppKit
-
-private struct ShareSheet: NSViewRepresentable {
-    let items: [Any]
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            let picker = NSSharingServicePicker(items: items)
-            picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-#endif
 
 #if DEBUG
 #Preview(traits: .fixedLayout(width: 700, height: 800)) {

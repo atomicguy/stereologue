@@ -16,9 +16,11 @@ struct CardGridView: View {
     let emptyDescription: String
 
     @Environment(CardListContext.self) private var cardListContext
+    // Prefetch into the memory cache (the default) so cells appear instantly:
+    // .diskCache would only download bytes and skip the expensive decode/resize.
     @State private var prefetcher = ImagePrefetcher(
         pipeline: .shared,
-        destination: .diskCache
+        destination: .memoryCache
     )
 
     private let columns = [
@@ -69,8 +71,10 @@ struct CardGridView: View {
         guard let index = cards.firstIndex(where: { $0.uuid == card.uuid }) else { return }
         // Prefetch the next 10 cards ahead
         let prefetchRange = (index + 1)..<min(index + 11, cards.count)
-        let urls = cards[prefetchRange].compactMap { $0.frontImageURL(quality: "r") }
-        prefetcher.startPrefetching(with: urls)
+        // Prefetch using the same request the cell renders, so the cache key
+        // (URL + resize processor) matches and the work is reused on display.
+        let requests = cards[prefetchRange].compactMap { CardGridItemView.thumbnailRequest(for: $0) }
+        prefetcher.startPrefetching(with: requests)
     }
 }
 

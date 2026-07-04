@@ -198,18 +198,20 @@ actor SpatialPhotoService {
         quality: String = "v",
         style: RestorationStyle? = nil
     ) async throws -> URL {
+        // Quality is part of the key/filename: two callers requesting the same
+        // card+style at different resolutions must not coalesce onto one task or
+        // alias the same file on disk.
         let suffix = style.map { "_restored_\($0.rawValue)" } ?? ""
-        let outputURL = cacheDirectory.appendingPathComponent(
-            "\(card.uuid)\(suffix).heic"
-        )
+        let variant = "\(card.uuid)_\(quality)\(suffix)"
+        let outputURL = cacheDirectory.appendingPathComponent("\(variant).heic")
 
         // Return cached file if it exists
         if FileManager.default.fileExists(atPath: outputURL.path) {
-            logger.debug("Cache hit for spatial photo: \(card.uuid)\(suffix)")
+            logger.debug("Cache hit for spatial photo: \(variant)")
             return outputURL
         }
 
-        let cacheKey = "\(card.uuid)\(suffix)"
+        let cacheKey = variant
 
         // Coalesce concurrent requests for the same card
         if let existingTask = inFlightTasks[cacheKey] {
@@ -266,7 +268,7 @@ actor SpatialPhotoService {
         quality: String = "v"
     ) async throws -> URL {
         let outputURL = cacheDirectory.appendingPathComponent(
-            "\(card.uuid)_share.heic"
+            "\(card.uuid)_\(quality)_share.heic"
         )
 
         // Always regenerate to ensure metadata is current
@@ -354,10 +356,15 @@ actor SpatialPhotoService {
         return (left, right)
     }
 
-    /// Removes the cached spatial photo for a card.
+    /// Removes every cached spatial photo variant for a card (all qualities,
+    /// restoration styles, and the shareable copy).
     func evict(cardUUID: String) {
-        let url = cacheDirectory.appendingPathComponent("\(cardUUID).heic")
-        try? FileManager.default.removeItem(at: url)
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: cacheDirectory, includingPropertiesForKeys: nil
+        )) ?? []
+        for url in contents where url.lastPathComponent.hasPrefix("\(cardUUID)_") {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     /// Removes all cached spatial photos.

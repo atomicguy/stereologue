@@ -136,6 +136,7 @@ struct StereologueApp: App {
         WindowGroup(id: "spatial-photo") {
             SpatialPhotoView(spatialPhotoService: spatialPhotoService)
                 .environment(spatialPhotoViewModel)
+                .environment(userDataService)
         }
         .defaultSize(width: 1280, height: 720)
         .windowStyle(.plain)

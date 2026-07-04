@@ -33,14 +33,12 @@ struct FavoritesView: View {
             return
         }
 
-        // Fetch all cards, then filter in-memory.
-        // SwiftData #Predicate has limitations with captured collections,
-        // and with uuid indexed this is fast even for 41K records.
-        var descriptor = FetchDescriptor<StereoCard>()
-        descriptor.propertiesToFetch = [\.uuid, \.title, \.frontImageID]
-        let allCards = (try? catalogContext.fetch(FetchDescriptor<StereoCard>())) ?? []
-        let uuidSet = Set(uuids)
-        let matched = allCards.filter { uuidSet.contains($0.uuid) }
+        // Fetch only the favorited cards by pushing the UUID match into the
+        // store (uuid is indexed), rather than loading the whole 41K catalog.
+        let descriptor = FetchDescriptor<StereoCard>(
+            predicate: #Predicate { uuids.contains($0.uuid) }
+        )
+        let matched = (try? catalogContext.fetch(descriptor)) ?? []
 
         // Preserve the favorited-at ordering
         let orderMap = Dictionary(uniqueKeysWithValues: uuids.enumerated().map { ($1, $0) })

@@ -33,9 +33,12 @@ struct AlbumDetailView: View {
             return
         }
 
-        let allCards = (try? catalogContext.fetch(FetchDescriptor<StereoCard>())) ?? []
-        let uuidSet = Set(uuids)
-        let matched = allCards.filter { uuidSet.contains($0.uuid) }
+        // Fetch only this album's cards via an indexed predicate, rather than
+        // loading the whole catalog and filtering in memory.
+        let descriptor = FetchDescriptor<StereoCard>(
+            predicate: #Predicate { uuids.contains($0.uuid) }
+        )
+        let matched = (try? catalogContext.fetch(descriptor)) ?? []
 
         // Preserve the album sort order
         let orderMap = Dictionary(uniqueKeysWithValues: uuids.enumerated().map { ($1, $0) })

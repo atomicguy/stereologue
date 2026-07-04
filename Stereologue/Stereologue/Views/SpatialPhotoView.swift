@@ -23,6 +23,7 @@ private let logger = Logger(
 
 struct SpatialPhotoView: View {
     @Environment(SpatialPhotoViewModel.self) private var viewModel
+    @Environment(UserDataService.self) private var userDataService
     @Environment(\.dismiss) private var dismiss
 
     let spatialPhotoService: SpatialPhotoService
@@ -33,6 +34,7 @@ struct SpatialPhotoView: View {
     @State private var currentStyle: RestorationStyle?
     @State private var displayedCardUUID: String?
     @State private var useFadeTransition = false
+    @State private var isFavorite = false
 
     var body: some View {
         GeometryReader3D { geometry in
@@ -45,6 +47,8 @@ struct SpatialPhotoView: View {
                 } else if isLoading {
                     ProgressView()
                         .scaleEffect(1.5)
+                } else if isRunningInPreview {
+                    stereoPhotoPlaceholder
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -67,12 +71,21 @@ struct SpatialPhotoView: View {
         }
         .task(id: viewModel.currentCardUUID) {
             await loadSpatialPhoto()
+            refreshFavoriteState()
         }
         .onChange(of: viewModel.isPresented) { _, presented in
             if !presented {
                 dismiss()
             }
         }
+    }
+
+    private func refreshFavoriteState() {
+        guard let uuid = viewModel.currentCardUUID else {
+            isFavorite = false
+            return
+        }
+        isFavorite = userDataService.isFavorite(cardUUID: uuid)
     }
 
     // MARK: - Spatial Photo Content
@@ -112,7 +125,7 @@ struct SpatialPhotoView: View {
                 bounds.extents.y / presentationSize.y
             )
             entity.scale = SIMD3<Float>(scale, scale, 1.0)
-            entity.position.z = 0
+            entity.position.z = -0.1
         }
         .gesture(
             DragGesture()
@@ -130,6 +143,29 @@ struct SpatialPhotoView: View {
                     }
                 }
         )
+    }
+
+    // MARK: - Stereo Photo Placeholder (Preview Only)
+
+    private var isRunningInPreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+
+    private var stereoPhotoPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .fill(
+                LinearGradient(
+                    colors: [.gray.opacity(0.5), .gray.opacity(0.3)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .padding(40)
     }
 
     // MARK: - Photo Transition
@@ -216,6 +252,21 @@ struct SpatialPhotoView: View {
             }
             .disabled(!viewModel.hasNext || isLoading)
             .padding(.leading, 8)
+
+            Divider()
+                .frame(height: 40)
+                .padding(.horizontal, 12)
+
+            Button {
+                guard let uuid = viewModel.currentCardUUID else { return }
+                userDataService.toggleFavorite(cardUUID: uuid)
+                isFavorite.toggle()
+            } label: {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.title3)
+                    .foregroundStyle(isFavorite ? .red : .primary)
+            }
+            .disabled(viewModel.currentCardUUID == nil)
 
             Divider()
                 .frame(height: 40)
@@ -370,7 +421,8 @@ private func makePreviewViewModel() -> SpatialPhotoViewModel {
 #Preview(windowStyle: .plain) {
     SpatialPhotoView(spatialPhotoService: SpatialPhotoService())
         .environment(makePreviewViewModel())
-        .modelContainer(PreviewSampleData.container)
+        .previewEnvironment()
+        .frame(width: 1280, height: 1024)
 }
 #endif
 
