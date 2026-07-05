@@ -3,9 +3,10 @@
 //  Stereologue
 //
 //  Photos-style spatial photo viewer for visionOS.
-//  Displays stereo HEICs via RealityKit's ImagePresentationComponent
-//  in a dedicated window with a thumbnail strip ornament and
-//  swipe-to-navigate transitions.
+//  Displays stereo pairs via RealityKit's ImagePresentationComponent,
+//  built from in-memory spatial HEIC bytes (no disk round-trip), in a
+//  dedicated window with a thumbnail strip ornament and swipe-to-navigate
+//  transitions.
 //
 
 #if os(visionOS)
@@ -14,6 +15,7 @@ import SwiftUI
 import SwiftData
 import RealityKit
 import NukeUI
+import ImageIO
 import OSLog
 
 private let logger = Logger(
@@ -28,20 +30,21 @@ struct SpatialPhotoView: View {
 
     let spatialPhotoService: SpatialPhotoService
 
-    @State private var spatialPhotoURL: URL?
+    @State private var spatialPhotoData: Data?
     @State private var isLoading = false
     @State private var isRestoring = false
     @State private var currentStyle: RestorationStyle?
     @State private var displayedCardUUID: String?
     @State private var useFadeTransition = false
     @State private var isFavorite = false
+    @State private var isImmersive = false
 
     var body: some View {
         GeometryReader3D { geometry in
             ZStack {
                 // Spatial photo with push transition
-                if let spatialPhotoURL {
-                    spatialPhotoContent(url: spatialPhotoURL, geometry: geometry)
+                if let spatialPhotoData {
+                    spatialPhotoContent(data: spatialPhotoData, geometry: geometry)
                         .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")")
                         .transition(photoTransition)
                 } else if isLoading {
@@ -91,14 +94,16 @@ struct SpatialPhotoView: View {
     // MARK: - Spatial Photo Content
 
     @ViewBuilder
-    private func spatialPhotoContent(url: URL, geometry: GeometryProxy3D) -> some View {
+    private func spatialPhotoContent(data: Data, geometry: GeometryProxy3D) -> some View {
         RealityView { content in
             let entity = Entity()
             do {
-                var component = try await ImagePresentationComponent(
-                    contentsOf: url
-                )
-                component.desiredViewingMode = .spatialStereo
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+                    logger.error("Failed to create CGImageSource from spatial photo data")
+                    return
+                }
+                var component = try await ImagePresentationComponent(imageSource: source)
+                component.desiredViewingMode = preferredViewingMode(for: component)
                 entity.components.set(component)
 
                 entity.components.set(InputTargetComponent(allowedInputTypes: .indirect))
@@ -112,9 +117,15 @@ struct SpatialPhotoView: View {
             }
         } update: { content in
             guard let entity = content.entities.first,
-                  let component = entity.components[ImagePresentationComponent.self] else {
+                  var component = entity.components[ImagePresentationComponent.self] else {
                 return
             }
+            // Keep the presentation mode in sync with the immersive toggle.
+            component.desiredViewingMode = preferredViewingMode(for: component)
+            entity.components.set(component)
+
+            // Immersive mode fills the field of view; skip windowed scaling.
+            guard !isImmersive else { return }
             let presentationSize = component.presentationScreenSize
             guard presentationSize != .zero else { return }
             let bounds = content.convert(
@@ -143,6 +154,18 @@ struct SpatialPhotoView: View {
                     }
                 }
         )
+    }
+
+    /// Chooses the stereo viewing mode based on the immersive toggle, falling
+    /// back to windowed `.spatialStereo` when immersive isn't available.
+    private func preferredViewingMode(
+        for component: ImagePresentationComponent
+    ) -> ImagePresentationComponent.ViewingMode {
+        if isImmersive,
+           component.availableViewingModes.contains(.spatialStereoImmersive) {
+            return .spatialStereoImmersive
+        }
+        return .spatialStereo
     }
 
     // MARK: - Stereo Photo Placeholder (Preview Only)
@@ -272,6 +295,23 @@ struct SpatialPhotoView: View {
                 .frame(height: 40)
                 .padding(.horizontal, 12)
 
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isImmersive.toggle()
+                }
+            } label: {
+                Image(systemName: isImmersive
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right")
+                    .font(.title3)
+                    .foregroundStyle(isImmersive ? .yellow : .primary)
+            }
+            .disabled(isLoading || spatialPhotoData == nil)
+
+            Divider()
+                .frame(height: 40)
+                .padding(.horizontal, 12)
+
             if isRestoring {
                 ProgressView()
                     .controlSize(.small)
@@ -352,11 +392,11 @@ struct SpatialPhotoView: View {
         useFadeTransition = false
 
         do {
-            let url = try await spatialPhotoService.spatialPhotoURL(
+            let data = try await spatialPhotoService.spatialHEICData(
                 for: cardData, style: currentStyle
             )
             withAnimation(.easeInOut(duration: 0.35)) {
-                spatialPhotoURL = url
+                spatialPhotoData = data
                 displayedCardUUID = cardUUID
             }
             prefetchAdjacent()
@@ -375,13 +415,13 @@ struct SpatialPhotoView: View {
         isRestoring = true
 
         do {
-            let url = try await spatialPhotoService.spatialPhotoURL(
+            let data = try await spatialPhotoService.spatialHEICData(
                 for: cardData,
                 style: style
             )
             useFadeTransition = true
             withAnimation(.easeInOut(duration: 0.35)) {
-                spatialPhotoURL = url
+                spatialPhotoData = data
                 displayedCardUUID = cardUUID
                 currentStyle = style
             }

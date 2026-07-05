@@ -11,28 +11,19 @@ import SwiftData
 struct SubjectsListView: View {
     @Query(sort: \Subject.name) private var subjects: [Subject]
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
-    ]
-
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(subjects, id: \.name) { subject in
-                    let name = subject.name
-                    NavigationLink(value: subject) {
-                        BrowseMosaicItem(
-                            title: name,
-                            cardPredicate: #Predicate { card in
-                                card.subjects.contains { $0.name == name }
-                            }
-                        )
-                    }
-                    .buttonStyle(.plain)
+        BrowseMosaicGrid(
+            entities: subjects,
+            id: \.name,
+            title: { $0.name },
+            count: \.cardCount,
+            predicate: { subject in
+                let name = subject.name
+                return #Predicate { card in
+                    card.subjects.contains { $0.name == name }
                 }
             }
-            .padding(.horizontal)
-        }
+        )
         .navigationTitle("Subjects")
     }
 }

@@ -17,6 +17,7 @@ struct StereologueApp: App {
     let userContainer: ModelContainer
     let userDataService: UserDataService
     private let spatialPhotoService: SpatialPhotoService
+    private let catalogQueryService: CatalogQueryService
     #if os(visionOS)
     @State private var spatialPhotoViewModel = SpatialPhotoViewModel()
     #endif
@@ -57,7 +58,24 @@ struct StereologueApp: App {
         catalogContainer = catalog
         userContainer = user
         userDataService = UserDataService(userContext: user.mainContext)
+        catalogQueryService = CatalogQueryService(modelContainer: catalog)
         initializationError = initError
+    }
+
+    /// Populates each browse entity's denormalized `cardCount` once per install,
+    /// off the main actor. Skipped when running on a fallback (in-memory) store,
+    /// which has no catalog data to count.
+    private func backfillCardCountsIfNeeded() async {
+        guard initializationError?.isUsingFallback != true else { return }
+        let key = "CardCountBackfilled_v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        do {
+            try await catalogQueryService.backfillCardCounts()
+            UserDefaults.standard.set(true, forKey: key)
+            Self.logger.info("Card count backfill complete")
+        } catch {
+            Self.logger.error("Card count backfill failed: \(error.localizedDescription)")
+        }
     }
     
     /// Creates in-memory containers as a fallback when persistent storage fails.
@@ -110,9 +128,11 @@ struct StereologueApp: App {
                 .environment(\.userModelContext, userContainer.mainContext)
                 .environment(userDataService)
                 .environment(\.spatialPhotoService, spatialPhotoService)
+                .environment(\.catalogQueryService, catalogQueryService)
                 #if os(visionOS)
                 .environment(spatialPhotoViewModel)
                 #endif
+                .task { await backfillCardCountsIfNeeded() }
                 .alert(
                     "Data Storage Error",
                     isPresented: .constant(initializationError != nil),
@@ -214,6 +234,10 @@ private struct SpatialPhotoServiceKey: EnvironmentKey {
     static let defaultValue: SpatialPhotoService? = nil
 }
 
+private struct CatalogQueryServiceKey: EnvironmentKey {
+    static let defaultValue: CatalogQueryService? = nil
+}
+
 extension EnvironmentValues {
     var userModelContext: ModelContext? {
         get { self[UserModelContextKey.self] }
@@ -223,5 +247,10 @@ extension EnvironmentValues {
     var spatialPhotoService: SpatialPhotoService? {
         get { self[SpatialPhotoServiceKey.self] }
         set { self[SpatialPhotoServiceKey.self] = newValue }
+    }
+
+    var catalogQueryService: CatalogQueryService? {
+        get { self[CatalogQueryServiceKey.self] }
+        set { self[CatalogQueryServiceKey.self] = newValue }
     }
 }

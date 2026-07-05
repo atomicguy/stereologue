@@ -106,7 +106,16 @@ final class CatalogStoreMigrator {
         )
         logger.info("Cards: \(cardCount), Collections: \(self.collectionsByName.count)")
 
-        // Step 6: Save
+        // Step 6: Denormalize card counts onto each entity (the inverse
+        // relationships are populated in-context, so `cards.count` is accurate
+        // before save). Lets browse tiles show the badge without a per-tile query.
+        logger.info("Denormalizing card counts...")
+        for creator in creatorsByPK.values { creator.cardCount = creator.cards.count }
+        for subject in subjectsByPK.values { subject.cardCount = subject.cards.count }
+        for place in placesByPK.values { place.cardCount = place.cards.count }
+        for collection in collectionsByName.values { collection.cardCount = collection.cards.count }
+
+        // Step 7: Save
         logger.info("Saving new store...")
         try context.save()
         logger.info("Migration complete! New store at \(newStoreURL.path)")

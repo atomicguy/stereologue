@@ -39,8 +39,8 @@ struct ContentView: View {
             Tab("Dates", systemImage: "calendar", value: AppTab.dates) {
                 NavigationStack {
                     DatesView()
-                        .navigationDestination(for: YearSelection.self) { selection in
-                            YearCardsView(year: selection.year)
+                        .navigationDestination(for: YearGroup.self) { group in
+                            YearCardsView(year: group.year)
                         }
                         .cardNavigationDestinations()
                 }

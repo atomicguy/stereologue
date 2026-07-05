@@ -135,8 +135,28 @@ actor SpatialPhotoService {
     /// Directory where generated spatial HEIC files are cached.
     private let cacheDirectory: URL
 
-    /// In-flight conversion tasks, keyed by card UUID, to avoid duplicate work.
-    private var inFlightTasks: [String: Task<URL, Error>] = [:]
+    /// In-memory cache of generated spatial HEIC bytes, keyed by variant.
+    ///
+    /// The viewer builds a `CGImageSource` straight from these bytes, so the
+    /// display path never writes to or reads back from disk. Bounded with a
+    /// simple LRU; the bytes are also exactly what the share path needs.
+    private var dataCache: [String: Data] = [:]
+    private var dataCacheOrder: [String] = []
+    private let dataCacheLimit = 16
+
+    /// In-flight conversion tasks, keyed by variant, to coalesce duplicate work.
+    private var inFlightTasks: [String: Task<Data, Error>] = [:]
+
+    /// Inserts data into the bounded in-memory cache, evicting the oldest
+    /// variants once the limit is exceeded.
+    private func cacheData(_ data: Data, for key: String) {
+        if dataCache[key] == nil { dataCacheOrder.append(key) }
+        dataCache[key] = data
+        while dataCacheOrder.count > dataCacheLimit {
+            let evicted = dataCacheOrder.removeFirst()
+            dataCache[evicted] = nil
+        }
+    }
 
     /// Corrects vertical misalignment between stereo pairs.
     private let rectificationService = StereoRectificationService()
@@ -182,53 +202,50 @@ actor SpatialPhotoService {
 
     // MARK: - Public API
 
-    /// Returns the URL to a spatial HEIC for the given card, creating it if needed.
+    /// Returns the spatial HEIC **bytes** for the given card, generating them if needed.
     ///
-    /// If the spatial HEIC is already cached on disk, returns immediately.
-    /// Otherwise downloads the source image, crops the stereo pair, and
-    /// writes the spatial HEIC. Concurrent requests for the same card
-    /// are coalesced into a single download/conversion.
+    /// The viewer builds a `CGImageSource` directly from this data via
+    /// `ImagePresentationComponent(imageSource:)`, so the display path never
+    /// touches the filesystem. Results are cached in memory and concurrent
+    /// requests for the same variant are coalesced into a single conversion.
     ///
     /// - Parameters:
     ///   - card: Sendable card snapshot. Build with `card.spatialPhotoData(cropOverride:)` on MainActor.
     ///   - quality: IIIF quality code for the source image (default "v" = 2560px).
-    /// - Returns: File URL of the generated spatial HEIC.
-    func spatialPhotoURL(
+    /// - Returns: In-memory spatial HEIC data.
+    func spatialHEICData(
         for card: SpatialPhotoCardData,
         quality: String = "v",
         style: RestorationStyle? = nil
-    ) async throws -> URL {
-        // Quality is part of the key/filename: two callers requesting the same
-        // card+style at different resolutions must not coalesce onto one task or
-        // alias the same file on disk.
+    ) async throws -> Data {
+        // Quality and style are part of the key: two callers requesting the same
+        // card at different resolutions/styles must not coalesce onto one task
+        // or alias the same cache entry.
         let suffix = style.map { "_restored_\($0.rawValue)" } ?? ""
         let variant = "\(card.uuid)_\(quality)\(suffix)"
-        let outputURL = cacheDirectory.appendingPathComponent("\(variant).heic")
 
-        // Return cached file if it exists
-        if FileManager.default.fileExists(atPath: outputURL.path) {
+        if let cached = dataCache[variant] {
             logger.debug("Cache hit for spatial photo: \(variant)")
-            return outputURL
+            return cached
         }
 
-        let cacheKey = variant
-
-        // Coalesce concurrent requests for the same card
-        if let existingTask = inFlightTasks[cacheKey] {
+        // Coalesce concurrent requests for the same variant
+        if let existingTask = inFlightTasks[variant] {
             return try await existingTask.value
         }
 
-        let task = Task<URL, Error> {
-            defer { inFlightTasks[cacheKey] = nil }
-            return try await createSpatialPhoto(
-                for: card,
-                quality: quality,
-                outputURL: outputURL,
-                style: style
+        let task = Task<Data, Error> {
+            defer { inFlightTasks[variant] = nil }
+            let (left, right) = try await preparedStereoPair(
+                for: card, quality: quality, style: style
             )
+            let data = try makeSpatialHEICData(leftImage: left, rightImage: right)
+            cacheData(data, for: variant)
+            logger.info("Spatial photo generated in memory: \(variant)")
+            return data
         }
 
-        inFlightTasks[cacheKey] = task
+        inFlightTasks[variant] = task
         return try await task.value
     }
 
@@ -245,7 +262,7 @@ actor SpatialPhotoService {
             guard card.hasStereoDetections else { continue }
             Task {
                 do {
-                    _ = try await spatialPhotoURL(
+                    _ = try await spatialHEICData(
                         for: card, quality: quality, style: style
                     )
                 } catch {
@@ -274,12 +291,12 @@ actor SpatialPhotoService {
         // Always regenerate to ensure metadata is current
         try? FileManager.default.removeItem(at: outputURL)
 
-        return try await createSpatialPhoto(
-            for: card,
-            quality: quality,
-            outputURL: outputURL,
-            metadata: metadata
+        let (left, right) = try await preparedStereoPair(for: card, quality: quality)
+        let data = try makeSpatialHEICData(
+            leftImage: left, rightImage: right, metadata: metadata
         )
+        try data.write(to: outputURL)
+        return outputURL
     }
 
     /// Returns the cropped left and right stereo pair as platform images.
@@ -291,55 +308,9 @@ actor SpatialPhotoService {
         quality: String = "v",
         style: RestorationStyle? = nil
     ) async throws -> (left: PlatformImage, right: PlatformImage) {
-        guard let sourceURL = card.frontImageURL(quality: quality) else {
-            throw SpatialPhotoError.noFrontImage
-        }
-
-        guard card.hasStereoDetections else {
-            throw SpatialPhotoError.missingDetections
-        }
-
-        let leftDet = card.leftDetection
-        let rightDet = card.rightDetection
-
-        let platformImage = try await pipeline.image(for: sourceURL)
-        guard let sourceImage = platformCGImage(from: platformImage) else {
-            throw SpatialPhotoError.cgImageCreationFailed
-        }
-
-        let sourceWidth = Double(sourceImage.width)
-        let sourceHeight = Double(sourceImage.height)
-        let scaleX = card.imageWidth.map { sourceWidth / $0 } ?? 1.0
-        let scaleY = card.imageHeight.map { sourceHeight / $0 } ?? 1.0
-
-        var leftCG = try cropImage(
-            sourceImage, detection: leftDet, label: "left",
-            scaleX: scaleX, scaleY: scaleY
+        let (leftFinal, rightFinal) = try await preparedStereoPair(
+            for: card, quality: quality, style: style
         )
-        var rightCG = try cropImage(
-            sourceImage, detection: rightDet, label: "right",
-            scaleX: scaleX, scaleY: scaleY
-        )
-
-        if let style {
-            leftCG = await restorationPipeline.restore(leftCG, style: style)
-            rightCG = await restorationPipeline.restore(rightCG, style: style)
-        }
-
-        // Rectify vertical misalignment
-        do {
-            let rectified = try await rectificationService.rectify(
-                left: leftCG, right: rightCG
-            )
-            leftCG = rectified.left
-            rightCG = rectified.right
-        } catch {
-            logger.warning(
-                "Stereo rectification failed: \(error.localizedDescription)"
-            )
-        }
-
-        let (leftFinal, rightFinal) = matchDimensions(left: leftCG, right: rightCG)
 
         #if canImport(UIKit)
         let left = UIImage(cgImage: leftFinal)
@@ -359,6 +330,12 @@ actor SpatialPhotoService {
     /// Removes every cached spatial photo variant for a card (all qualities,
     /// restoration styles, and the shareable copy).
     func evict(cardUUID: String) {
+        let prefix = "\(cardUUID)_"
+        for key in dataCacheOrder where key.hasPrefix(prefix) {
+            dataCache[key] = nil
+        }
+        dataCacheOrder.removeAll { $0.hasPrefix(prefix) }
+
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: cacheDirectory, includingPropertiesForKeys: nil
         )) ?? []
@@ -369,6 +346,8 @@ actor SpatialPhotoService {
 
     /// Removes all cached spatial photos.
     func evictAll() {
+        dataCache.removeAll()
+        dataCacheOrder.removeAll()
         try? FileManager.default.removeItem(at: cacheDirectory)
         try? FileManager.default.createDirectory(
             at: cacheDirectory,
@@ -376,15 +355,16 @@ actor SpatialPhotoService {
         )
     }
 
-    // MARK: - Spatial HEIC Creation
+    // MARK: - Stereo Pair Preparation
 
-    private func createSpatialPhoto(
+    /// Downloads, crops, restores, rectifies, and dimension-matches the stereo
+    /// pair for a card, returning the two eye images ready for spatial encoding
+    /// (`makeSpatialHEICData`) or flat-screen display (`croppedStereoPair`).
+    private func preparedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String,
-        outputURL: URL,
-        metadata: SpatialPhotoMetadata? = nil,
         style: RestorationStyle? = nil
-    ) async throws -> URL {
+    ) async throws -> (left: CGImage, right: CGImage) {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
         }
@@ -396,7 +376,7 @@ actor SpatialPhotoService {
         let leftDetection = card.leftDetection
         let rightDetection = card.rightDetection
 
-        logger.info("Creating spatial photo for \(card.uuid)")
+        logger.info("Preparing stereo pair for \(card.uuid)")
 
         // 1. Download source image via Nuke (benefits from its disk cache)
         let sourceImage: CGImage
@@ -449,20 +429,7 @@ actor SpatialPhotoService {
         }
 
         // 5. Resize to matching dimensions (required for spatial photos)
-        let (leftFinal, rightFinal) = matchDimensions(
-            left: leftCGImage, right: rightCGImage
-        )
-
-        // 6. Write spatial HEIC
-        try writeSpatialHEIC(
-            leftImage: leftFinal,
-            rightImage: rightFinal,
-            to: outputURL,
-            metadata: metadata
-        )
-
-        logger.info("Spatial photo created: \(outputURL.lastPathComponent)")
-        return outputURL
+        return matchDimensions(left: leftCGImage, right: rightCGImage)
     }
 
     // MARK: - Image Cropping
@@ -538,14 +505,13 @@ actor SpatialPhotoService {
 
     // MARK: - Spatial HEIC Writing
 
-    /// Writes a spatial HEIC file containing the left and right stereo images
-    /// with spatial metadata for visionOS presentation.
-    private func writeSpatialHEIC(
+    /// Encodes a spatial HEIC (left + right stereo images with spatial metadata
+    /// for visionOS presentation) entirely in memory and returns the bytes.
+    private func makeSpatialHEICData(
         leftImage: CGImage,
         rightImage: CGImage,
-        to outputURL: URL,
         metadata: SpatialPhotoMetadata? = nil
-    ) throws {
+    ) throws -> Data {
         // Compute spatial metadata from image dimensions
         let imageWidth = Double(leftImage.width)
         let imageHeight = Double(leftImage.height)
@@ -598,13 +564,14 @@ actor SpatialPhotoService {
             rightProperties[kCGImagePropertyTIFFDictionary] = tiff
         }
 
-        // Create the HEIC image destination with 2 images
+        // Create the HEIC image destination with 2 images, backed by CFData
         let destinationProperties: [CFString: Any] = [
             kCGImagePropertyPrimaryImage: 0
         ]
 
-        guard let destination = CGImageDestinationCreateWithURL(
-            outputURL as CFURL,
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data as CFMutableData,
             UTType.heic.identifier as CFString,
             2,
             destinationProperties as CFDictionary
@@ -623,6 +590,8 @@ actor SpatialPhotoService {
         guard CGImageDestinationFinalize(destination) else {
             throw SpatialPhotoError.heicWriteFailed
         }
+
+        return data as Data
     }
 
     /// Extracts a CGImage from Nuke's platform image type.

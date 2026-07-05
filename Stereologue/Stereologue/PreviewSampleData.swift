@@ -120,6 +120,8 @@ enum PreviewSampleData {
         UserDataService(userContext: userContainer.mainContext)
     }()
 
+    static let catalogQueryService = CatalogQueryService(modelContainer: container)
+
     // MARK: - Sample Object Accessors
 
     private static func firstSample<T: PersistentModel>(_ type: T.Type) -> T {
@@ -187,6 +189,7 @@ struct PreviewEnvironment: ViewModifier {
             .modelContainer(PreviewSampleData.container)
             .environment(\.userModelContext, PreviewSampleData.userContainer.mainContext)
             .environment(PreviewSampleData.userDataService)
+            .environment(\.catalogQueryService, PreviewSampleData.catalogQueryService)
             .environment(cardListContext)
     }
 }

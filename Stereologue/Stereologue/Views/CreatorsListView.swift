@@ -11,26 +11,17 @@ import SwiftData
 struct CreatorsListView: View {
     @Query(sort: \Creator.name) private var creators: [Creator]
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 12)
-    ]
-
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(creators, id: \.name) { creator in
-                    let name = creator.name
-                    NavigationLink(value: creator) {
-                        BrowseMosaicItem(
-                            title: name,
-                            cardPredicate: #Predicate { $0.creator?.name == name }
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
+        BrowseMosaicGrid(
+            entities: creators,
+            id: \.name,
+            title: { $0.name },
+            count: \.cardCount,
+            predicate: { creator in
+                let name = creator.name
+                return #Predicate { $0.creator?.name == name }
             }
-            .padding(.horizontal)
-        }
+        )
         .navigationTitle("Creators")
     }
 }

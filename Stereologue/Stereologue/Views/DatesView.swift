@@ -2,83 +2,51 @@
 //  DatesView.swift
 //  Stereologue
 //
-//  Browse cards grouped by decade and year.
+//  Browse cards by year, as a grid of mosaic thumbnails matching the other
+//  browse tabs (Subjects/Creators/Places/Collections).
 //
 
 import SwiftUI
 import SwiftData
 
 struct DatesView: View {
-    @Environment(\.modelContext) private var catalogContext
-    @State private var decades: [DecadeGroup] = []
+    @Environment(\.catalogQueryService) private var queryService
+    @State private var years: [YearGroup] = []
 
     var body: some View {
-        List {
-            ForEach(decades) { decadeGroup in
-                Section("\(decadeGroup.decade)s") {
-                    ForEach(decadeGroup.years) { yearGroup in
-                        NavigationLink(value: YearSelection(year: yearGroup.year)) {
-                            HStack {
-                                Text(String(yearGroup.year))
-                                    .font(.headline)
-                                Spacer()
-                                Text("^[\(yearGroup.count) card](inflect: true)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
+        BrowseMosaicGrid(
+            entities: years,
+            id: \.id,
+            title: { String($0.year) },
+            count: \.count,
+            predicate: { group in
+                let year = group.year
+                return #Predicate { $0.yearStart == year }
             }
-        }
-        .navigationTitle("Dates")
-        .task { loadDecades() }
-    }
-
-    /// Fetches just the `yearStart` column (the catalog is read-only, so a
-    /// one-shot fetch is fine) and groups it into decades once, rather than
-    /// materializing all 41K cards and re-grouping on every body pass.
-    private func loadDecades() {
-        guard decades.isEmpty else { return }
-        var descriptor = FetchDescriptor<StereoCard>(
-            predicate: #Predicate { $0.yearStart != nil },
-            sortBy: [SortDescriptor(\.yearStart)]
         )
-        descriptor.propertiesToFetch = [\.yearStart]
-        let years = (try? catalogContext.fetch(descriptor))?.compactMap(\.yearStart) ?? []
+        .navigationTitle("Dates")
+        .task { await loadYears() }
+    }
 
-        let byDecade = Dictionary(grouping: years) { ($0 / 10) * 10 }
-        decades = byDecade.keys.sorted().map { decade in
-            let byYear = Dictionary(grouping: byDecade[decade]!) { $0 }
-            let yearCounts = byYear.keys.sorted().map { year in
-                YearCount(year: year, count: byYear[year]!.count)
-            }
-            return DecadeGroup(decade: decade, years: yearCounts)
-        }
+    /// Loads the per-year counts once, off the main actor via
+    /// `CatalogQueryService`, so the large `yearStart` scan doesn't hitch the UI.
+    private func loadYears() async {
+        guard years.isEmpty, let queryService else { return }
+        years = await queryService.yearCounts()
     }
 }
 
-/// A decade and the per-year card counts within it.
-private struct DecadeGroup: Identifiable {
-    let decade: Int
-    let years: [YearCount]
-    var id: Int { decade }
-}
-
-/// A single year and how many cards fall in it.
-private struct YearCount: Identifiable {
+/// A single year and its card count. Doubles as the browse-grid entity and the
+/// navigation value for `YearCardsView`. `nonisolated` (the project defaults to
+/// MainActor) so it's Sendable across the `CatalogQueryService` actor boundary.
+nonisolated struct YearGroup: Hashable, Identifiable, Sendable {
     let year: Int
     let count: Int
-    var id: Int { year }
-}
-
-/// Lightweight navigation value wrapping a year.
-struct YearSelection: Hashable {
-    let year: Int
+    var id: String { String(year) }
 }
 
 #if DEBUG
-#Preview(traits: .fixedLayout(width: 400, height: 700)) {
+#Preview(traits: .fixedLayout(width: 900, height: 700)) {
     NavigationStack {
         DatesView()
     }

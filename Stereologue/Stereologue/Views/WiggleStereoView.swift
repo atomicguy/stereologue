@@ -265,6 +265,19 @@ struct WiggleStereoView: View {
         #endif
     }
 
+    /// Frame interval range: 0.5s (slowest) to 0.06s (fastest).
+    private let intervalRange: ClosedRange<Double> = 0.06...0.5
+
+    /// The slider drives *speed* (left = slow, right = fast) while `interval` is
+    /// a *delay*, so the binding reflects across the range: sliding right lowers
+    /// the interval (faster wiggle), matching the tortoise/hare labels.
+    private var wiggleSpeedBinding: Binding<Double> {
+        Binding(
+            get: { intervalRange.lowerBound + intervalRange.upperBound - interval },
+            set: { interval = intervalRange.lowerBound + intervalRange.upperBound - $0 }
+        )
+    }
+
     private var wiggleControls: some View {
         HStack(spacing: 20) {
             Button {
@@ -277,7 +290,7 @@ struct WiggleStereoView: View {
             HStack(spacing: 8) {
                 Image(systemName: "tortoise")
                     .font(.caption)
-                Slider(value: $interval, in: 0.06...0.5)
+                Slider(value: wiggleSpeedBinding, in: intervalRange)
                     .frame(width: 140)
                 Image(systemName: "hare")
                     .font(.caption)

@@ -74,8 +74,11 @@ struct ImageDetection: Codable, Hashable, Sendable {
 
 // MARK: - StereoCard Model
 
+// `nonisolated` (the project defaults to MainActor isolation) so the catalog
+// model can be read from `CatalogQueryService`'s background `@ModelActor`
+// context, not just the main actor. Main-actor code still uses it freely.
 @Model
-final class StereoCard {
+nonisolated final class StereoCard {
 
     #Unique<StereoCard>([\.uuid])
 

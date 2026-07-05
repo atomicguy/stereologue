@@ -9,8 +9,10 @@
 import Foundation
 import SwiftData
 
+// `nonisolated` so the model is readable from `CatalogQueryService`'s
+// background `@ModelActor` context (the project defaults to MainActor).
 @Model
-final class Creator {
+nonisolated final class Creator {
 
     #Unique<Creator>([\.name])
 
@@ -21,9 +23,10 @@ final class Creator {
     @Relationship(inverse: \StereoCard.creator)
     var cards: [StereoCard] = []
 
-    var cardCount: Int {
-        cards.count
-    }
+    /// Denormalized count of related cards. Populated at import/migration and
+    /// backfilled on first launch (see `CatalogQueryService`), so browse tiles
+    /// can show the badge without an unbounded per-tile count query.
+    var cardCount: Int = 0
 
     init(name: String = "") {
         self.name = name
