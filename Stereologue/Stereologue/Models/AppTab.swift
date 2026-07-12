@@ -21,7 +21,4 @@ enum AppTab: Hashable {
 
     // Albums (dynamic — one tab per user album)
     case album(UUID)
-
-    // Search
-    case search
 }
