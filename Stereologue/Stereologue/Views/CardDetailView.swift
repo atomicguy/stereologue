@@ -51,7 +51,7 @@ struct CardDetailView: View {
             .padding(.top, 12)
         }
         .fontDesign(.serif)
-        .onAppear {
+        .task(id: card.uuid) {
             notes = userDataService.notes(for: card.uuid)
             cropOverride = userDataService.cropOverride(for: card.uuid)
         }

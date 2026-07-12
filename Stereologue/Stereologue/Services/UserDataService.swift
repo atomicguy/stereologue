@@ -53,6 +53,12 @@ final class UserDataService {
     /// publishes the reactive list itself.
     private(set) var albums: [UserAlbum] = []
 
+    /// Favorited card UUIDs, most-recently-favorited first. Kept in sync with
+    /// the user container via the same `didSave` observer as `albums`, so views
+    /// reading it re-render whenever favorites change — including CloudKit sync.
+    /// This is what makes the Favorites grid update after favoriting elsewhere.
+    private(set) var favoriteUUIDs: [String] = []
+
     /// Held only so it's discoverable; the observer is never torn down because
     /// `UserDataService` lives for the entire app lifetime.
     private var didSaveObservation: NSObjectProtocol?
@@ -65,6 +71,7 @@ final class UserDataService {
     init(userContext: ModelContext) {
         self.userContext = userContext
         refreshAlbums()
+        refreshFavorites()
         didSaveObservation = NotificationCenter.default.addObserver(
             forName: ModelContext.didSave,
             object: userContext,
@@ -72,6 +79,7 @@ final class UserDataService {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshAlbums()
+                self?.refreshFavorites()
             }
         }
     }
@@ -85,6 +93,18 @@ final class UserDataService {
         } catch {
             logger.error("Failed to refresh albums: \(error)")
             lastError = .fetchFailed("albums", error)
+        }
+    }
+
+    private func refreshFavorites() {
+        do {
+            let descriptor = FetchDescriptor<UserFavorite>(
+                sortBy: [SortDescriptor(\.favoritedAt, order: .reverse)]
+            )
+            favoriteUUIDs = try userContext.fetch(descriptor).map(\.cardUUID)
+        } catch {
+            logger.error("Failed to refresh favorites: \(error)")
+            lastError = .fetchFailed("favorites", error)
         }
     }
 
@@ -124,19 +144,6 @@ final class UserDataService {
         } catch {
             logger.error("Failed to toggle favorite for \(cardUUID): \(error)")
             lastError = .fetchFailed("favorites", error)
-        }
-    }
-
-    func allFavoriteUUIDs() -> [String] {
-        do {
-            let descriptor = FetchDescriptor<UserFavorite>(
-                sortBy: [SortDescriptor(\.favoritedAt, order: .reverse)]
-            )
-            return try userContext.fetch(descriptor).map(\.cardUUID)
-        } catch {
-            logger.error("Failed to fetch all favorites: \(error)")
-            lastError = .fetchFailed("favorites", error)
-            return []
         }
     }
 

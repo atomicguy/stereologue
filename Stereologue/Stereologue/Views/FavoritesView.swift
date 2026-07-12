@@ -23,26 +23,11 @@ struct FavoritesView: View {
             emptyDescription: "Cards you favorite will appear here."
         )
         .navigationTitle("Favorites")
-        .onAppear { loadFavorites() }
-    }
-
-    private func loadFavorites() {
-        let uuids = userDataService.allFavoriteUUIDs()
-        guard !uuids.isEmpty else {
-            favoriteCards = []
-            return
+        // Keyed on the reactive favorite list, so the grid refetches whenever
+        // favorites change anywhere — fixing the stale-on-return `onAppear` bug.
+        .task(id: userDataService.favoriteUUIDs) {
+            favoriteCards = catalogContext.cards(matching: userDataService.favoriteUUIDs)
         }
-
-        // Fetch only the favorited cards by pushing the UUID match into the
-        // store (uuid is indexed), rather than loading the whole 41K catalog.
-        let descriptor = FetchDescriptor<StereoCard>(
-            predicate: #Predicate { uuids.contains($0.uuid) }
-        )
-        let matched = (try? catalogContext.fetch(descriptor)) ?? []
-
-        // Preserve the favorited-at ordering
-        let orderMap = Dictionary(uniqueKeysWithValues: uuids.enumerated().map { ($1, $0) })
-        favoriteCards = matched.sorted { (orderMap[$0.uuid] ?? 0) < (orderMap[$1.uuid] ?? 0) }
     }
 }
 

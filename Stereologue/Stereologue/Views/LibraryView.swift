@@ -10,11 +10,25 @@ import SwiftData
 
 struct LibraryView: View {
     @State private var searchText = ""
+    @State private var debouncedSearchText = ""
 
     var body: some View {
-        LibraryGrid(searchText: searchText)
+        LibraryGrid(searchText: debouncedSearchText)
             .navigationTitle("Stereologue")
             .searchable(text: $searchText, prompt: "Cards, subjects, creators…")
+            // Debounce: rebuilding LibraryGrid's @Query runs a `localizedStandard-
+            // Contains` scan over the whole 41K-card catalog (title isn't indexed)
+            // on the main context. Rebuild only after typing pauses, not on every
+            // keystroke. Clearing the field applies immediately.
+            .task(id: searchText) {
+                if searchText.isEmpty {
+                    debouncedSearchText = ""
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                debouncedSearchText = searchText
+            }
     }
 }
 

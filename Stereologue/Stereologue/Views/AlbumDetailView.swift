@@ -23,26 +23,11 @@ struct AlbumDetailView: View {
             emptyDescription: "Add cards to this album from the card detail view."
         )
         .navigationTitle(album.name)
-        .onAppear { loadCards() }
-    }
-
-    private func loadCards() {
-        let uuids = album.cardUUIDs
-        guard !uuids.isEmpty else {
-            cards = []
-            return
+        // Keyed on the album's card list, so the grid refetches when cards are
+        // added or removed rather than only on first appearance.
+        .task(id: album.cardUUIDs) {
+            cards = catalogContext.cards(matching: album.cardUUIDs)
         }
-
-        // Fetch only this album's cards via an indexed predicate, rather than
-        // loading the whole catalog and filtering in memory.
-        let descriptor = FetchDescriptor<StereoCard>(
-            predicate: #Predicate { uuids.contains($0.uuid) }
-        )
-        let matched = (try? catalogContext.fetch(descriptor)) ?? []
-
-        // Preserve the album sort order
-        let orderMap = Dictionary(uniqueKeysWithValues: uuids.enumerated().map { ($1, $0) })
-        cards = matched.sorted { (orderMap[$0.uuid] ?? 0) < (orderMap[$1.uuid] ?? 0) }
     }
 }
 
