@@ -25,7 +25,11 @@ struct CardThumbnailView: View {
                     placeholder
                 }
             }
-            .processors([.resize(width: 160)])
+            // `.pixels` is essential: `.resize(width:)` defaults to `.points`,
+            // which multiplies by the screen scale and makes the resize a no-op,
+            // decoding the full-size source and inflating the memory cache cost.
+            // 160px comfortably fills the 80×50pt frame at typical display scales.
+            .processors([.resize(width: 160, unit: .pixels)])
             .priority(.low)
             .transition(.opacity)
             .frame(width: 80, height: 50)

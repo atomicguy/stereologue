@@ -7,12 +7,21 @@
 //
 
 import SwiftUI
+import Nuke
 
 struct CardPagerView: View {
     let initialCard: StereoCard
     @Environment(CardListContext.self) private var cardListContext
     @Environment(UserDataService.self) private var userDataService
     @Environment(\.spatialPhotoService) private var spatialPhotoService
+
+    // Warm the adjacent cards' full-res images into the memory cache so a swipe
+    // reveals them without a fresh download/decode. `.memoryCache` (the default)
+    // performs the expensive decode ahead of display, unlike `.diskCache`.
+    @State private var prefetcher = ImagePrefetcher(
+        pipeline: .shared,
+        destination: .memoryCache
+    )
 
     @State private var cards: [StereoCard]?
     @State private var currentCardUUID: String?
@@ -97,11 +106,14 @@ struct CardPagerView: View {
             .toolbar { cardToolbar(for: currentCard) }
             .onChange(of: currentCardUUID) {
                 isFavorite = userDataService.isFavorite(cardUUID: currentCard.uuid)
+                prefetchNeighbors()
             }
             .onAppear {
                 snapshotContextIfNeeded()
                 isFavorite = userDataService.isFavorite(cardUUID: currentCard.uuid)
+                prefetchNeighbors()
             }
+            .onDisappear { prefetcher.stopPrefetching() }
             #if os(visionOS)
             .onChange(of: spatialPhotoViewModel.currentCardUUID) { _, newUUID in
                 guard spatialPhotoViewModel.isPresented,
@@ -251,6 +263,26 @@ struct CardPagerView: View {
     }
 
     // MARK: - Helpers
+
+    /// Prefetches the full-resolution front (and back) images of the cards
+    /// immediately adjacent to the current one. Uses a bare URL request — the
+    /// same one `CardDetailView` renders via `LazyImage(url:)` — so the decoded
+    /// image lands under the matching memory-cache key and the swipe reuses it.
+    private func prefetchNeighbors() {
+        let cards = displayCards
+        guard cards.count > 1,
+              let index = cards.firstIndex(where: { $0.uuid == currentCardUUID }) else { return }
+        let urls = [index - 1, index + 1]
+            .filter { cards.indices.contains($0) }
+            .flatMap { neighbor -> [URL] in
+                let card = cards[neighbor]
+                return [
+                    card.frontImageURL(quality: "q"),
+                    card.backImageURL(quality: "q")
+                ].compactMap { $0 }
+            }
+        prefetcher.startPrefetching(with: urls)
+    }
 
     private func snapshotContextIfNeeded() {
         guard cards == nil else { return }
