@@ -37,7 +37,6 @@ struct SpatialPhotoView: View {
     @State private var displayedCardUUID: String?
     @State private var useFadeTransition = false
     @State private var isFavorite = false
-    @State private var isImmersive = false
 
     var body: some View {
         GeometryReader3D { geometry in
@@ -103,7 +102,7 @@ struct SpatialPhotoView: View {
                     return
                 }
                 var component = try await ImagePresentationComponent(imageSource: source)
-                component.desiredViewingMode = preferredViewingMode(for: component)
+                component.desiredViewingMode = .spatialStereo
                 entity.components.set(component)
 
                 entity.components.set(InputTargetComponent(allowedInputTypes: .indirect))
@@ -117,15 +116,9 @@ struct SpatialPhotoView: View {
             }
         } update: { content in
             guard let entity = content.entities.first,
-                  var component = entity.components[ImagePresentationComponent.self] else {
+                  let component = entity.components[ImagePresentationComponent.self] else {
                 return
             }
-            // Keep the presentation mode in sync with the immersive toggle.
-            component.desiredViewingMode = preferredViewingMode(for: component)
-            entity.components.set(component)
-
-            // Immersive mode fills the field of view; skip windowed scaling.
-            guard !isImmersive else { return }
             let presentationSize = component.presentationScreenSize
             guard presentationSize != .zero else { return }
             let bounds = content.convert(
@@ -154,18 +147,6 @@ struct SpatialPhotoView: View {
                     }
                 }
         )
-    }
-
-    /// Chooses the stereo viewing mode based on the immersive toggle, falling
-    /// back to windowed `.spatialStereo` when immersive isn't available.
-    private func preferredViewingMode(
-        for component: ImagePresentationComponent
-    ) -> ImagePresentationComponent.ViewingMode {
-        if isImmersive,
-           component.availableViewingModes.contains(.spatialStereoImmersive) {
-            return .spatialStereoImmersive
-        }
-        return .spatialStereo
     }
 
     // MARK: - Stereo Photo Placeholder (Preview Only)
@@ -290,23 +271,6 @@ struct SpatialPhotoView: View {
                     .foregroundStyle(isFavorite ? .red : .primary)
             }
             .disabled(viewModel.currentCardUUID == nil)
-
-            Divider()
-                .frame(height: 40)
-                .padding(.horizontal, 12)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isImmersive.toggle()
-                }
-            } label: {
-                Image(systemName: isImmersive
-                    ? "arrow.down.right.and.arrow.up.left"
-                    : "arrow.up.left.and.arrow.down.right")
-                    .font(.title3)
-                    .foregroundStyle(isImmersive ? .yellow : .primary)
-            }
-            .disabled(isLoading || spatialPhotoData == nil)
 
             Divider()
                 .frame(height: 40)
