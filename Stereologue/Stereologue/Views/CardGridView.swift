@@ -14,6 +14,9 @@ struct CardGridView: View {
     let emptyTitle: String
     let emptySystemImage: String
     let emptyDescription: String
+    /// Called as the user nears the end of the grid, so a paged caller can load
+    /// the next page. `nil` for fully-materialized grids (Library, Favorites…).
+    let onReachEnd: (() -> Void)?
 
     @Environment(CardListContext.self) private var cardListContext
     // Prefetch into the memory cache (the default) so cells appear instantly:
@@ -31,12 +34,14 @@ struct CardGridView: View {
         cards: [StereoCard],
         emptyTitle: String = "No Cards",
         emptySystemImage: String = "photo.on.rectangle.angled",
-        emptyDescription: String = "No cards to display."
+        emptyDescription: String = "No cards to display.",
+        onReachEnd: (() -> Void)? = nil
     ) {
         self.cards = cards
         self.emptyTitle = emptyTitle
         self.emptySystemImage = emptySystemImage
         self.emptyDescription = emptyDescription
+        self.onReachEnd = onReachEnd
     }
 
     var body: some View {
@@ -53,7 +58,7 @@ struct CardGridView: View {
                         ForEach(cards, id: \.uuid) { card in
                             NavigationLink(value: card) {
                                 CardGridItemView(card: card)
-                                    .onAppear { prefetchAround(card) }
+                                    .onAppear { onCardAppear(card) }
                             }
                             .buttonStyle(.plain)
                         }
@@ -67,14 +72,21 @@ struct CardGridView: View {
         .onDisappear { prefetcher.stopPrefetching() }
     }
 
-    private func prefetchAround(_ card: StereoCard) {
+    private func onCardAppear(_ card: StereoCard) {
         guard let index = cards.firstIndex(where: { $0.uuid == card.uuid }) else { return }
-        // Prefetch the next 10 cards ahead
+
+        // Prefetch the next 10 cards ahead, using the same request the cell
+        // renders so the cache key (URL + resize processor) matches and the
+        // decode/resize work is reused on display.
         let prefetchRange = (index + 1)..<min(index + 11, cards.count)
-        // Prefetch using the same request the cell renders, so the cache key
-        // (URL + resize processor) matches and the work is reused on display.
         let requests = cards[prefetchRange].compactMap { CardGridItemView.thumbnailRequest(for: $0) }
         prefetcher.startPrefetching(with: requests)
+
+        // Ask a paged caller to load the next page just before the end, so new
+        // cards are ready by the time they scroll into view.
+        if let onReachEnd, index >= cards.count - 10 {
+            onReachEnd()
+        }
     }
 }
 

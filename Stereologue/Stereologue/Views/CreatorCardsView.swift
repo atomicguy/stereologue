@@ -11,13 +11,18 @@ struct CreatorCardsView: View {
     let creator: Creator
 
     var body: some View {
-        CardGridView(
-            cards: creator.cards,
+        PagedCardGridView(
+            predicate: predicate,
             emptyTitle: "No Cards",
             emptySystemImage: "person",
             emptyDescription: "No cards for this creator."
         )
         .navigationTitle(creator.name)
+    }
+
+    private var predicate: Predicate<StereoCard> {
+        let name = creator.name
+        return #Predicate<StereoCard> { $0.creator?.name == name }
     }
 }
 

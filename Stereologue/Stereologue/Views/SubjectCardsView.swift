@@ -11,13 +11,20 @@ struct SubjectCardsView: View {
     let subject: Subject
 
     var body: some View {
-        CardGridView(
-            cards: subject.cards,
+        PagedCardGridView(
+            predicate: predicate,
             emptyTitle: "No Cards",
             emptySystemImage: "tag",
             emptyDescription: "No cards for this subject."
         )
         .navigationTitle(subject.name)
+    }
+
+    private var predicate: Predicate<StereoCard> {
+        let name = subject.name
+        return #Predicate<StereoCard> { card in
+            card.subjects.contains { $0.name == name }
+        }
     }
 }
 

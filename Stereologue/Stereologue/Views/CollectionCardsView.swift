@@ -12,13 +12,18 @@ struct CollectionCardsView: View {
     let collection: Collection
 
     var body: some View {
-        CardGridView(
-            cards: collection.cards,
+        PagedCardGridView(
+            predicate: predicate,
             emptyTitle: "No Cards",
             emptySystemImage: "building.columns",
             emptyDescription: "No cards in this collection."
         )
         .navigationTitle(collection.name)
+    }
+
+    private var predicate: Predicate<StereoCard> {
+        let name = collection.name
+        return #Predicate<StereoCard> { $0.collection?.name == name }
     }
 }
 
