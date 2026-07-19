@@ -409,10 +409,20 @@ actor SpatialPhotoService {
             scaleX: scaleX, scaleY: scaleY
         )
 
-        // 3. Optionally restore tone and contrast
+        // 3. Optionally restore tone and contrast. The two eyes are
+        // independent, so restore them concurrently.
         if let style {
-            leftCGImage = await restorationPipeline.restore(leftCGImage, style: style)
-            rightCGImage = await restorationPipeline.restore(rightCGImage, style: style)
+            let pipeline = restorationPipeline
+            async let leftRestored = pipeline.restore(leftCGImage, style: style)
+            async let rightRestored = pipeline.restore(rightCGImage, style: style)
+            leftCGImage = await leftRestored
+            rightCGImage = await rightRestored
+
+            // 3a. Even out overall brightness between the two eyes. A global
+            // per-image remap; preserves parallax (and therefore depth).
+            let matched = pipeline.matchPair(left: leftCGImage, right: rightCGImage)
+            leftCGImage = matched.left
+            rightCGImage = matched.right
         }
 
         // 4. Rectify vertical misalignment between the stereo pair
