@@ -2,22 +2,31 @@ import Vision
 import CoreImage
 import CoreGraphics
 import OSLog
-import simd
 
 enum RectificationError: LocalizedError {
-    case homographyFailed
     case correctionFailed
 
     var errorDescription: String? {
         switch self {
-        case .homographyFailed:
-            return "Failed to compute stereo image alignment"
         case .correctionFailed:
             return "Failed to apply stereo rectification"
         }
     }
 }
 
+/// Removes vertical misalignment between the two frames of a stereoview card
+/// while preserving horizontal parallax.
+///
+/// A stereo pair differs by two things: horizontal *parallax* — the depth cue
+/// that makes the spatial photo work — and unwanted *vertical* misalignment
+/// introduced when the two prints were mounted and the card was scanned.
+///
+/// The correct operation is therefore to null out the vertical offset and
+/// leave the horizontal offset alone. We deliberately do **not** use a full
+/// homography (`VNHomographicImageRegistrationRequest`): morphing one frame to
+/// globally match the other cancels the very parallax it's supposed to keep,
+/// flattening the scene. Instead we estimate the global translation between
+/// the frames and apply only its vertical component.
 actor StereoRectificationService {
 
     private let logger = Logger(
@@ -26,6 +35,14 @@ actor StereoRectificationService {
     )
 
     private let ciContext = CIContext()
+
+    /// Vertical corrections below this many pixels aren't worth applying.
+    private let minShiftPixels: CGFloat = 0.5
+
+    /// A "vertical" shift larger than this fraction of frame height isn't a
+    /// real misalignment — registration latched onto the wrong content. Two
+    /// frames of the same card are never off by a quarter of their height.
+    private let maxShiftFraction: CGFloat = 0.25
 
     // MARK: - Public API
 
@@ -37,169 +54,78 @@ actor StereoRectificationService {
             left: left, right: right
         )
 
-        let H: matrix_float3x3
-        do {
-            H = try computeHomography(
-                reference: leftForAnalysis, floating: rightForAnalysis
+        // Estimate the global shift that best aligns the right frame onto the
+        // left. tx captures the (depth-dependent) horizontal parallax and is
+        // discarded; ty is the vertical misalignment we want to remove.
+        let verticalShift = computeVerticalShift(
+            reference: leftForAnalysis, floating: rightForAnalysis
+        )
+
+        guard abs(verticalShift) >= minShiftPixels else {
+            logger.info("Stereo pair already vertically aligned; nothing to correct")
+            return (left, right)
+        }
+
+        let maxShift = CGFloat(rightForAnalysis.height) * maxShiftFraction
+        guard abs(verticalShift) <= maxShift else {
+            logger.warning(
+                "Vertical shift \(verticalShift, privacy: .public)px exceeds \(self.maxShiftFraction * 100, privacy: .public)% of height; skipping rectification"
             )
-        } catch {
-            logger.info("Homography failed, trying translational alignment")
-            return try rectifyTranslational(left: left, right: right)
-        }
-
-        guard isReasonableHomography(H) else {
-            logger.warning("Homography too extreme, skipping rectification")
             return (left, right)
         }
 
-        let correctedRight = try applyHomography(
-            H, to: right, matchingExtentOf: left
+        let corrected = try applyVerticalShift(verticalShift, to: right)
+        logger.info(
+            "Stereo rectification applied (Δy=\(verticalShift, privacy: .public)px)"
         )
-
-        logger.info("Stereo rectification applied")
-        return (left, correctedRight)
-    }
-
-    // MARK: - Vision Homography
-
-    private nonisolated func computeHomography(
-        reference: CGImage,
-        floating: CGImage
-    ) throws -> matrix_float3x3 {
-        let request = VNHomographicImageRegistrationRequest(
-            targetedCGImage: floating
-        )
-        let handler = VNImageRequestHandler(cgImage: reference)
-        try handler.perform([request])
-
-        guard let result = request.results?.first else {
-            throw RectificationError.homographyFailed
-        }
-
-        return result.warpTransform
-    }
-
-    // MARK: - Homography Validation
-
-    private func isReasonableHomography(_ H: matrix_float3x3) -> Bool {
-        let corners: [SIMD3<Float>] = [
-            SIMD3(0, 0, 1), SIMD3(1, 0, 1),
-            SIMD3(1, 1, 1), SIMD3(0, 1, 1)
-        ]
-        let identity: [SIMD2<Float>] = [
-            SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1), SIMD2(0, 1)
-        ]
-
-        let mapped = corners.map { p -> SIMD2<Float> in
-            let r = H * p
-            guard abs(r.z) > 1e-6 else {
-                return SIMD2(.infinity, .infinity)
-            }
-            return SIMD2(r.x / r.z, r.y / r.z)
-        }
-
-        for p in mapped {
-            if p.x < -0.3 || p.x > 1.3 || p.y < -0.3 || p.y > 1.3 {
-                return false
-            }
-        }
-
-        let maxDisplacement = zip(mapped, identity)
-            .map { distance($0.0, $0.1) }
-            .max() ?? 0
-
-        return maxDisplacement < 0.15
-    }
-
-    // MARK: - Perspective Warp
-
-    private func applyHomography(
-        _ H: matrix_float3x3,
-        to image: CGImage,
-        matchingExtentOf reference: CGImage
-    ) throws -> CGImage {
-        let ciImage = CIImage(cgImage: image)
-        let refW = CGFloat(reference.width)
-        let refH = CGFloat(reference.height)
-
-        let normalizedCorners: [SIMD3<Float>] = [
-            SIMD3(0, 0, 1),
-            SIMD3(1, 0, 1),
-            SIMD3(1, 1, 1),
-            SIMD3(0, 1, 1)
-        ]
-
-        let mappedCorners = normalizedCorners.map { p -> CGPoint in
-            let r = H * p
-            return CGPoint(
-                x: CGFloat(r.x / r.z) * refW,
-                y: CGFloat(r.y / r.z) * refH
-            )
-        }
-
-        guard let filter = CIFilter(name: "CIPerspectiveTransform") else {
-            throw RectificationError.correctionFailed
-        }
-        filter.setValue(ciImage, forKey: kCIInputImageKey)
-        filter.setValue(CIVector(cgPoint: mappedCorners[0]), forKey: "inputBottomLeft")
-        filter.setValue(CIVector(cgPoint: mappedCorners[1]), forKey: "inputBottomRight")
-        filter.setValue(CIVector(cgPoint: mappedCorners[2]), forKey: "inputTopRight")
-        filter.setValue(CIVector(cgPoint: mappedCorners[3]), forKey: "inputTopLeft")
-
-        guard let output = filter.outputImage else {
-            throw RectificationError.correctionFailed
-        }
-
-        let cropRect = CGRect(x: 0, y: 0, width: refW, height: refH)
-        guard let result = ciContext.createCGImage(output, from: cropRect) else {
-            throw RectificationError.correctionFailed
-        }
-
-        return result
-    }
-
-    // MARK: - Translational Fallback
-
-    private func rectifyTranslational(
-        left: CGImage,
-        right: CGImage
-    ) throws -> (left: CGImage, right: CGImage) {
-        let transform = try computeTranslation(reference: left, floating: right)
-
-        if abs(transform.ty) < 1.5 && abs(transform.tx) < 1.5 {
-            return (left, right)
-        }
-
-        let ciImage = CIImage(cgImage: right)
-        let transformed = ciImage.transformed(by: transform)
-        let cropRect = CGRect(
-            x: 0, y: 0,
-            width: CGFloat(left.width), height: CGFloat(left.height)
-        )
-
-        guard let corrected = ciContext.createCGImage(transformed, from: cropRect) else {
-            return (left, right)
-        }
-
-        logger.info("Stereo rectification applied (translational fallback)")
         return (left, corrected)
     }
 
-    private nonisolated func computeTranslation(
+    // MARK: - Vertical Shift Estimation
+
+    /// Returns the vertical offset (in pixels of the analysis images) that best
+    /// aligns `floating` onto `reference`, or `0` if registration fails.
+    ///
+    /// The horizontal component of the alignment is intentionally ignored: it
+    /// is the stereo parallax, which must be preserved.
+    private nonisolated func computeVerticalShift(
         reference: CGImage,
         floating: CGImage
-    ) throws -> CGAffineTransform {
+    ) -> CGFloat {
         let request = VNTranslationalImageRegistrationRequest(
             targetedCGImage: floating
         )
         let handler = VNImageRequestHandler(cgImage: reference)
-        try handler.perform([request])
-
-        guard let result = request.results?.first else {
-            return .identity
+        do {
+            try handler.perform([request])
+        } catch {
+            return 0
         }
+        guard let result = request.results?.first else { return 0 }
+        return result.alignmentTransform.ty
+    }
 
-        return result.alignmentTransform
+    // MARK: - Vertical Shift Application
+
+    private func applyVerticalShift(
+        _ dy: CGFloat,
+        to image: CGImage
+    ) throws -> CGImage {
+        let ciImage = CIImage(cgImage: image)
+        // Vertical translation only — no horizontal component, so parallax is
+        // untouched. Same Core Image transform path the previous fallback used,
+        // so the sign/orientation convention is unchanged.
+        let shifted = ciImage.transformed(
+            by: CGAffineTransform(translationX: 0, y: dy)
+        )
+        let cropRect = CGRect(
+            x: 0, y: 0,
+            width: CGFloat(image.width), height: CGFloat(image.height)
+        )
+        guard let result = ciContext.createCGImage(shifted, from: cropRect) else {
+            throw RectificationError.correctionFailed
+        }
+        return result
     }
 
     // MARK: - Dimension Matching

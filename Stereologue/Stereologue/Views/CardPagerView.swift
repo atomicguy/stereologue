@@ -61,7 +61,7 @@ struct CardPagerView: View {
                 NavigationStack {
                     WiggleStereoView(
                         card: currentCard,
-                        cropOverride: nil
+                        cropOverride: userDataService.cropOverride(for: currentCard.uuid)
                     )
                 }
             }

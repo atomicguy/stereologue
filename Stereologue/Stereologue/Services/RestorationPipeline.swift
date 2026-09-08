@@ -77,13 +77,16 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         case .evenLighting: result = evenLighting(image)
         }
 
-        // SCUNet denoising will be inserted here
-
         guard let result else {
             logger.warning("Restoration render failed, returning original")
             return cgImage
         }
-        return result
+
+        // Dust/scratch/grain removal (SCUNet, converted per
+        // stereoview-restoration-guide.md). Falls back to a no-op if the
+        // model fails to load for any reason.
+        guard let scunet = SCUNetModel.shared else { return result }
+        return SCUNetDenoiser(model: scunet).apply(to: result)
     }
 
     /// Evens out overall brightness between the two eyes of a stereo pair.
