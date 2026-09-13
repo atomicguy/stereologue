@@ -142,7 +142,19 @@ stereo fusion.
    Rectification registration (and any future disparity matching) runs on
    ≤ 640 px copies; the transform / field is upsampled and applied at full
    size.
-3. **Learned scratch detector (2–3 days, spike first).**
+3. **Learned scratch detector (2–3 days, spike first).** — 🔬 spike done, verdict open
+   Spike results (`tools/scratch-detector/`, run with uv): the U-Net converts
+   to Core ML (FP16, 72 MB, static 256 or 512 px input — flexible shapes
+   crash the Core ML CPU backend on macOS 26.6) and matches PyTorch to
+   ≥ 0.99 IoU. Neural Engine time on an M-series Mac: 33 ms at 256, 130 ms
+   at 512 per eye, so the < 1 s Vision Pro budget is safe. Quality is
+   unproven on this collection: on the auto-selected eval cards it flags
+   print borders and thin bright scene lines (cane stalks, pipes), and mask
+   density separates "defects" from "clean" cards only ~1.5× with large
+   per-card variance. Decide with human-marked scratches: the Restoration
+   Eval tool has a Scratch mask overlay with a threshold slider (load the
+   model from the app's Documents folder; it is not bundled). A 6 % border
+   exclusion and a higher threshold (0.6–0.8) are the first knobs to try.
    Convert only the scratch-detection U-Net from *Bringing Old Photos Back to
    Life* (MIT-licensed code and checkpoints) to Core ML via coremltools; fp16,
    fixed 512 px input, run on a downscaled eye and upsample the mask. Compare

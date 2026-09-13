@@ -36,6 +36,15 @@ struct RestorationEvalView: View {
     @State private var exportProgress: (done: Int, total: Int)?
     @State private var exportFolder: URL?
 
+    // Scratch-detector spike (Phase 3.3): overlay the Core ML mask on the
+    // rendered pair. The model is loaded from Documents, not bundled.
+    @State private var detector: ScratchDetector?
+    @State private var detectorStatus = "Scratch detector: not loaded"
+    @State private var showScratchMask = false
+    @State private var maskThreshold: Float = 0.4
+    @State private var maskedPair: (left: CGImage, right: CGImage)?
+    @State private var maskStats: String?
+
     private static let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "RestorationEval")
 
     var body: some View {
@@ -99,6 +108,7 @@ struct RestorationEvalView: View {
         .onChange(of: tier) { render() }
     }
 
+    @ViewBuilder
     private var controls: some View {
         HStack {
             Picker("Style", selection: $style) {
@@ -118,6 +128,27 @@ struct RestorationEvalView: View {
             Toggle("Right eye", isOn: $showRightEye)
                 .toggleStyle(.switch)
         }
+        HStack {
+            Toggle("Scratch mask", isOn: $showScratchMask)
+                .toggleStyle(.switch)
+                .disabled(detector == nil)
+                .onChange(of: showScratchMask) { updateMask() }
+            if showScratchMask {
+                Slider(value: $maskThreshold, in: 0.2...0.9, step: 0.05)
+                    .frame(width: 160)
+                    .onChange(of: maskThreshold) { updateMask() }
+                Text("≥ \(maskThreshold, format: .number.precision(.fractionLength(2)))")
+                    .monospacedDigit()
+            }
+            if detector == nil {
+                Button("Load detector") { loadDetector() }
+            }
+            Text(maskStats ?? detectorStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer()
+        }
     }
 
     @ViewBuilder
@@ -127,7 +158,11 @@ struct RestorationEvalView: View {
         } else {
             HStack(spacing: 12) {
                 eyePanel(title: "Original (preview)", pair: original)
-                eyePanel(title: "\(style?.displayName ?? "Original") · \(tier.displayName)", pair: rendered)
+                eyePanel(
+                    title: "\(style?.displayName ?? "Original") · \(tier.displayName)"
+                        + (showScratchMask && maskedPair != nil ? " · scratch mask" : ""),
+                    pair: showScratchMask ? (maskedPair ?? rendered) : rendered
+                )
             }
             .overlay {
                 if isRendering { ProgressView().controlSize(.large) }
@@ -211,10 +246,49 @@ struct RestorationEvalView: View {
                 let (baseResult, lookResult) = try await (base, look)
                 original = baseResult
                 rendered = lookResult
+                maskedPair = nil
+                maskStats = nil
+                updateMask()
             } catch is CancellationError {
             } catch {
                 Self.logger.error("Eval render failed: \(error.localizedDescription)")
                 loadError = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Scratch detector
+
+    private func loadDetector() {
+        detectorStatus = "Scratch detector: loading…"
+        Task.detached {
+            do {
+                let loaded = try ScratchDetector.load()
+                await MainActor.run {
+                    detector = loaded
+                    detectorStatus = "Scratch detector: \(loaded.inputSize)px model loaded"
+                    updateMask()
+                }
+            } catch {
+                await MainActor.run { detectorStatus = "Scratch detector: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    /// Recomputes the red overlay and the mask density for the rendered pair.
+    private func updateMask() {
+        guard showScratchMask, let detector, let pair = rendered else { return }
+        let threshold = maskThreshold
+        Task.detached {
+            let left = detector.overlay(on: pair.left, threshold: threshold)
+            let right = detector.overlay(on: pair.right, threshold: threshold)
+            let stats = detector.maskFractions(for: pair.left, threshold: threshold)
+            await MainActor.run {
+                if let left, let right { maskedPair = (left, right) }
+                if let stats {
+                    maskStats = String(format: "left eye: %.2f%% flagged, %.2f%% excluding a 6%% border",
+                                       stats.whole * 100, stats.interior * 100)
+                }
             }
         }
     }

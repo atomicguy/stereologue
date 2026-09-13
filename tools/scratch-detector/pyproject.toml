@@ -1,0 +1,11 @@
+[project]
+name = "scratch-detector"
+version = "0.1.0"
+description = "Converts the Bringing Old Photos Back to Life scratch-detection U-Net to Core ML for Stereologue."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.7,<2.8",
+    "coremltools>=8.0",
+    "numpy",
+    "pillow",
+]
