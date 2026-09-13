@@ -1,4 +1,5 @@
 import Foundation
+import Accelerate
 import CoreImage
 import CoreGraphics
 import Metal
@@ -32,10 +33,17 @@ enum RestorationStyle: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Tone and contrast restoration for scanned prints.
+///
 /// Holds only immutable state (a thread-safe `CIContext` and a `Logger`) and
 /// its methods are pure, so it's a `Sendable` class rather than an actor —
 /// letting the two eyes of a stereo pair be restored concurrently instead of
 /// serializing on an actor executor.
+///
+/// Every stage works on `PixelPlanes` (planar Float32 RGB) with vDSP/vImage/
+/// vForce calls, never a per-pixel Swift loop, so it runs at library speed in
+/// Debug builds as well as Release. Color is preserved throughout by scaling
+/// RGB by a per-pixel luminance ratio rather than editing channels.
 nonisolated final class RestorationPipeline: @unchecked Sendable {
 
     private let logger = Logger(
@@ -45,15 +53,14 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
 
     private let ciContext: CIContext
 
-    /// An RGBA8 pixel buffer plus the dimensions and color space needed to
-    /// round-trip it back to a `CGImage`. CPU stages mutate `pixels` in place
-    /// so a whole intent needs only one readback and one writeback.
+    /// The working image: planar float RGB plus the color space needed to
+    /// round-trip it back to a `CGImage`.
     private struct Buffer {
-        var pixels: [UInt8]
-        let width: Int
-        let height: Int
+        var planes: PixelPlanes
         let colorSpace: CGColorSpace?
-        var count: Int { width * height }
+        var width: Int { planes.width }
+        var height: Int { planes.height }
+        var count: Int { planes.count }
     }
 
     init() {
@@ -76,20 +83,46 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         _ cgImage: CGImage,
         style: RestorationStyle = .enhance
     ) -> CGImage {
+        restoreTimed(cgImage, style: style).image
+    }
+
+    /// Wall-clock duration of one pipeline stage. Produced by `restoreTimed`
+    /// for profiling; the stage names are the private method names.
+    struct StageTiming: Sendable {
+        let stage: String
+        let duration: Duration
+    }
+
+    /// `restore`, plus how long each stage took. Timing cost is a clock read
+    /// per stage, so `restore` simply calls this and drops the timings.
+    func restoreTimed(
+        _ cgImage: CGImage,
+        style: RestorationStyle
+    ) -> (image: CGImage, timings: [StageTiming]) {
+        var timings: [StageTiming] = []
+        let clock = ContinuousClock()
+        let timer: StageTimer = { name, body in
+            let start = clock.now
+            body()
+            timings.append(StageTiming(stage: name, duration: clock.now - start))
+        }
+
         let image = ingest(cgImage)
         let result: CGImage?
         switch style {
-        case .enhance: result = enhance(image)
-        case .preserveTone: result = preserveTone(image)
-        case .evenLighting: result = evenLighting(image)
+        case .enhance: result = enhance(image, timer)
+        case .preserveTone: result = preserveTone(image, timer)
+        case .evenLighting: result = evenLighting(image, timer)
         }
 
         guard let result else {
             logger.warning("Restoration render failed, returning original")
-            return cgImage
+            return (cgImage, timings)
         }
-        return result
+        return (result, timings)
     }
+
+    private typealias StageTimer = (_ stage: String, _ body: () -> Void) -> Void
 
     /// Evens out overall brightness between the two eyes of a stereo pair.
     ///
@@ -102,13 +135,14 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     func matchPair(
         left: CGImage, right: CGImage
     ) -> (left: CGImage, right: CGImage) {
-        guard let leftPixels = readRGBA(left),
-              let rightPixels = readRGBA(right) else {
+        guard let leftPixels = readPlanes(left),
+              let rightPixels = readPlanes(right) else {
             return (left, right)
         }
-
-        let leftStats = luminanceStats(leftPixels)
-        let rightStats = luminanceStats(rightPixels)
+        let leftLum = leftPixels.luminance()
+        let rightLum = rightPixels.luminance()
+        let leftStats = luminanceStats(leftLum)
+        let rightStats = luminanceStats(rightLum)
 
         // Already balanced — skip the remap (and its two writebacks) entirely.
         if abs(leftStats.mean - rightStats.mean) < 0.02
@@ -121,8 +155,8 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         // clipped) eye rather than the midpoint — pulling both toward an average
         // would drag the good eye toward the blown one. When clipping is
         // comparable, fall back to the symmetric average.
-        let leftClip = clipFraction(leftPixels)
-        let rightClip = clipFraction(rightPixels)
+        let leftClip = Vec.fraction(of: leftLum, atLeast: 0.97, stride: analysisStride(leftLum.count))
+        let rightClip = Vec.fraction(of: rightLum, atLeast: 0.97, stride: analysisStride(rightLum.count))
         let targetMean: Float
         let targetStd: Float
         if abs(leftClip - rightClip) > 0.01 {
@@ -135,12 +169,12 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         }
 
         let newLeft = applyLuminanceAffine(
-            left, pixels: leftPixels,
+            left, planes: leftPixels, luminance: leftLum,
             sourceMean: leftStats.mean, sourceStd: leftStats.std,
             targetMean: targetMean, targetStd: targetStd
         ) ?? left
         let newRight = applyLuminanceAffine(
-            right, pixels: rightPixels,
+            right, planes: rightPixels, luminance: rightLum,
             sourceMean: rightStats.mean, sourceStd: rightStats.std,
             targetMean: targetMean, targetStd: targetStd
         ) ?? right
@@ -150,82 +184,103 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
 
     // MARK: - Intents
     //
-    // Each intent reads the pixels once, runs its CPU stages in place on that
-    // single buffer, then writes back once. The only GPU excursions are the
-    // Core Image color/tone filters (`neutralizeSepia`, `applyToneCurve`).
+    // Each intent reads the pixels once, runs its stages on the planar float
+    // buffer, then writes back once. The only GPU excursion is the Core Image
+    // tone curve at the end of `enhance`.
 
     /// Neutralize color cast, stretch tonal range robustly, then boost local
     /// contrast. The per-channel stretch doubles as a rough white balance.
-    private func enhance(_ image: CIImage) -> CGImage? {
-        guard var buffer = read(image) else { return nil }
+    private func enhance(_ image: CIImage, _ time: StageTimer) -> CGImage? {
+        var read: Buffer?
+        time("read") { read = self.read(image) }
+        guard var buffer = read else { return nil }
         // Data-driven white balance (shades-of-gray) neutralizes whatever color
         // cast the print has, without the old fixed sepia curve's assumption
         // about which cast it is.
-        autoWhiteBalance(&buffer.pixels, count: buffer.count)
-        percentileStretchPerChannel(&buffer.pixels, count: buffer.count, lowPct: 0.01, highPct: 0.99)
+        time("autoWhiteBalance") { autoWhiteBalance(&buffer.planes) }
+        time("percentileStretchPerChannel") {
+            percentileStretchPerChannel(&buffer.planes, lowPct: 0.01, highPct: 0.99)
+        }
         // Correct globally faded/dark or over-bright scans toward a mid-tone
         // target (color-preserving gamma).
-        autoExposure(&buffer.pixels, count: buffer.count)
-        var clahe = CLAHEProcessor()
-        clahe.tileSize = 128
-        clahe.clipLimit = 2.0
-        clahe.apply(to: &buffer.pixels, width: buffer.width, height: buffer.height)
-        guard let stretched = makeRGBA(
-            buffer.pixels, width: buffer.width, height: buffer.height,
-            colorSpace: buffer.colorSpace
-        ) else { return nil }
-        let toned = applyToneCurve(CIImage(cgImage: stretched))
-        return ciContext.createCGImage(toned, from: toned.extent)
+        time("autoExposure") { autoExposure(&buffer.planes) }
+        time("clahe") {
+            var clahe = CLAHEProcessor()
+            clahe.tileSize = 128
+            clahe.clipLimit = 2.0
+            applyCLAHE(clahe, to: &buffer.planes)
+        }
+        var stretched: CGImage?
+        time("makeRGBA") { stretched = makeImage(buffer) }
+        guard let stretched else { return nil }
+        var output: CGImage?
+        time("toneCurve") {
+            let toned = applyToneCurve(CIImage(cgImage: stretched))
+            output = ciContext.createCGImage(toned, from: toned.extent)
+        }
+        return output
     }
 
     /// Luminance-only enhancement. Every stage here (luminance stretch, CLAHE)
     /// scales RGB by a luminance *ratio*, so hue and saturation — including
     /// sepia and hand-tinting — pass through unchanged. No cast neutralization.
-    private func preserveTone(_ image: CIImage) -> CGImage? {
-        guard var buffer = read(image) else { return nil }
-        percentileStretchLuminance(&buffer.pixels, count: buffer.count, lowPct: 0.01, highPct: 0.99)
+    private func preserveTone(_ image: CIImage, _ time: StageTimer) -> CGImage? {
+        var read: Buffer?
+        time("read") { read = self.read(image) }
+        guard var buffer = read else { return nil }
+        time("percentileStretchLuminance") {
+            percentileStretchLuminance(&buffer.planes, lowPct: 0.01, highPct: 0.99)
+        }
         // Color-preserving auto-exposure, so faded prints are lifted while
         // sepia/hand-tinting stays intact.
-        autoExposure(&buffer.pixels, count: buffer.count)
-        var clahe = CLAHEProcessor()
-        clahe.tileSize = 160
-        clahe.clipLimit = 1.6
-        clahe.apply(to: &buffer.pixels, width: buffer.width, height: buffer.height)
-        return makeRGBA(
-            buffer.pixels, width: buffer.width, height: buffer.height,
-            colorSpace: buffer.colorSpace
-        )
+        time("autoExposure") { autoExposure(&buffer.planes) }
+        time("clahe") {
+            var clahe = CLAHEProcessor()
+            clahe.tileSize = 160
+            clahe.clipLimit = 1.6
+            applyCLAHE(clahe, to: &buffer.planes)
+        }
+        var output: CGImage?
+        time("makeRGBA") { output = makeImage(buffer) }
+        return output
     }
 
     /// Flatten uneven illumination with a homomorphic filter, then restore
     /// full tonal range. Color is preserved (luminance-ratio scaling).
-    private func evenLighting(_ image: CIImage) -> CGImage? {
-        guard var buffer = read(image) else { return nil }
-        homomorphic(
-            &buffer.pixels, width: buffer.width, height: buffer.height,
-            lowGain: 0.5, highGain: 1.6, blurFraction: 0.08
-        )
-        percentileStretchLuminance(&buffer.pixels, count: buffer.count, lowPct: 0.005, highPct: 0.995)
-        return makeRGBA(
-            buffer.pixels, width: buffer.width, height: buffer.height,
-            colorSpace: buffer.colorSpace
-        )
+    private func evenLighting(_ image: CIImage, _ time: StageTimer) -> CGImage? {
+        var read: Buffer?
+        time("read") { read = self.read(image) }
+        guard var buffer = read else { return nil }
+        time("homomorphic") {
+            homomorphic(&buffer.planes, lowGain: 0.5, highGain: 1.6, blurFraction: 0.08)
+        }
+        time("percentileStretchLuminance") {
+            percentileStretchLuminance(&buffer.planes, lowPct: 0.005, highPct: 0.995)
+        }
+        var output: CGImage?
+        time("makeRGBA") { output = makeImage(buffer) }
+        return output
     }
 
-    // MARK: - Stage: Ingest
+    // MARK: - Stage: Ingest / Readback
 
     private func ingest(_ cgImage: CGImage) -> CIImage {
         let sourceSpace = cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
         return CIImage(cgImage: cgImage, options: [.colorSpace: sourceSpace])
     }
 
-    /// Renders a CIImage to a CPU pixel buffer (the single readback per intent).
+    /// Renders a CIImage to the planar working buffer (the single readback
+    /// per intent).
     private func read(_ image: CIImage) -> Buffer? {
         guard let cg = ciContext.createCGImage(image, from: image.extent),
-              let pixels = readRGBA(cg) else {
+              let planes = readPlanes(cg) else {
             return nil
         }
-        return Buffer(pixels: pixels, width: cg.width, height: cg.height, colorSpace: cg.colorSpace)
+        return Buffer(planes: planes, colorSpace: cg.colorSpace)
+    }
+
+    private func makeImage(_ buffer: Buffer) -> CGImage? {
+        makeRGBA(buffer.planes.rgba(), width: buffer.width, height: buffer.height, colorSpace: buffer.colorSpace)
     }
 
     // MARK: - Stage: Auto White Balance
@@ -236,27 +291,16 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     /// dominant color, and — unlike a fixed sepia curve — it adapts to whatever
     /// cast the individual print actually has. Gains are clamped and a near-unit
     /// correction is skipped, so it's a no-op on already-neutral images.
-    private func autoWhiteBalance(_ pixels: inout [UInt8], count: Int) {
-        guard count > 0 else { return }
-        let p = 6.0
-        let stride = analysisStride(count)
-        var sumR = 0.0, sumG = 0.0, sumB = 0.0
-        var samples = 0
-        pixels.withUnsafeBufferPointer { src in
-            var i = 0
-            while i < count {
-                let base = i * 4
-                sumR += pow(Double(src[base]) / 255.0, p)
-                sumG += pow(Double(src[base + 1]) / 255.0, p)
-                sumB += pow(Double(src[base + 2]) / 255.0, p)
-                samples += 1
-                i += stride
-            }
+    private func autoWhiteBalance(_ planes: inout PixelPlanes) {
+        guard planes.count > 0 else { return }
+        let p: Float = 6
+        let stride = analysisStride(planes.count)
+        func pNormMean(_ channel: [Float]) -> Float {
+            Foundation.pow(Vec.mean(Vec.pow(Vec.sampled(channel, stride: stride), p)), 1 / p)
         }
-        guard samples > 0 else { return }
-        let meanR = Float(pow(sumR / Double(samples), 1.0 / p))
-        let meanG = Float(pow(sumG / Double(samples), 1.0 / p))
-        let meanB = Float(pow(sumB / Double(samples), 1.0 / p))
+        let meanR = pNormMean(planes.r)
+        let meanG = pNormMean(planes.g)
+        let meanB = pNormMean(planes.b)
         guard meanR > 0.001, meanG > 0.001, meanB > 0.001 else { return }
 
         let gray = (meanR + meanG + meanB) / 3
@@ -268,15 +312,7 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         if abs(gainR - 1) < 0.03 && abs(gainG - 1) < 0.03 && abs(gainB - 1) < 0.03 {
             return
         }
-
-        pixels.withUnsafeMutableBufferPointer { out in
-            for i in 0..<count {
-                let base = i * 4
-                out[base] = clampNormalizedByte(Float(out[base]) / 255.0 * gainR)
-                out[base + 1] = clampNormalizedByte(Float(out[base + 1]) / 255.0 * gainG)
-                out[base + 2] = clampNormalizedByte(Float(out[base + 2]) / 255.0 * gainB)
-            }
-        }
+        planes.multiply(r: gainR, g: gainG, b: gainB)
     }
 
     // MARK: - Stage: Auto Exposure
@@ -285,158 +321,71 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     /// a mid-tone target with a global gamma, scaling RGB by the luminance ratio
     /// so hue/saturation are untouched. Gamma is clamped and near-unit
     /// corrections are skipped, so a well-exposed image passes through unchanged.
-    private func autoExposure(_ pixels: inout [UInt8], count: Int, target: Float = 0.5) {
-        guard count > 0 else { return }
-        let stride = analysisStride(count)
-        var sum: Float = 0
-        var samples = 0
-        pixels.withUnsafeBufferPointer { src in
-            var i = 0
-            while i < count {
-                let base = i * 4
-                sum += 0.2126 * Float(src[base]) / 255.0
-                    + 0.7152 * Float(src[base + 1]) / 255.0
-                    + 0.0722 * Float(src[base + 2]) / 255.0
-                samples += 1
-                i += stride
-            }
-        }
-        guard samples > 0 else { return }
-        let mean = sum / Float(samples)
+    private func autoExposure(_ planes: inout PixelPlanes, target: Float = 0.5) {
+        guard planes.count > 0 else { return }
+        let lum = planes.luminance()
+        let mean = Vec.mean(lum, stride: analysisStride(planes.count))
         guard mean > 0.02, mean < 0.98 else { return }
 
-        var gamma = log(target) / log(mean)
+        var gamma = Foundation.log(target) / Foundation.log(mean)
         gamma = min(max(gamma, 0.5), 2.0)
         if abs(gamma - 1) < 0.05 { return }
 
-        pixels.withUnsafeMutableBufferPointer { out in
-            for i in 0..<count {
-                let base = i * 4
-                let r = Float(out[base]) / 255.0
-                let g = Float(out[base + 1]) / 255.0
-                let b = Float(out[base + 2]) / 255.0
-                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                guard l > 0.001 else { continue }
-                let ratio = pow(l, gamma) / l
-                out[base] = clampNormalizedByte(r * ratio)
-                out[base + 1] = clampNormalizedByte(g * ratio)
-                out[base + 2] = clampNormalizedByte(b * ratio)
-            }
-        }
+        let newL = Vec.pow(lum, gamma)
+        planes.multiply(by: Vec.ratio(newL: newL, overL: lum))
     }
 
     // MARK: - Stage: Percentile Contrast Stretch
 
     /// Independent per-channel percentile stretch. Equalizes the R/G/B ranges,
-    /// which also neutralizes color casts. Histograms are built from a strided
-    /// sample; the resulting 256-entry LUTs are applied to every pixel.
+    /// which also neutralizes color casts. Histograms come from a strided
+    /// sample; the resulting 256-entry lookup tables are applied to every pixel.
     private func percentileStretchPerChannel(
-        _ pixels: inout [UInt8], count: Int, lowPct: Float, highPct: Float
+        _ planes: inout PixelPlanes, lowPct: Float, highPct: Float
     ) {
-        guard count > 0 else { return }
-        var histR = [Int](repeating: 0, count: 256)
-        var histG = [Int](repeating: 0, count: 256)
-        var histB = [Int](repeating: 0, count: 256)
-        let stride = analysisStride(count)
-        var samples = 0
-
-        pixels.withUnsafeBufferPointer { src in
-            var i = 0
-            while i < count {
-                let base = i * 4
-                histR[Int(src[base])] += 1
-                histG[Int(src[base + 1])] += 1
-                histB[Int(src[base + 2])] += 1
-                samples += 1
-                i += stride
-            }
+        guard planes.count > 0 else { return }
+        let stride = analysisStride(planes.count)
+        func table(_ channel: [Float]) -> [Float] {
+            let sample = Vec.sampled(channel, stride: stride)
+            let hist = Vec.histogram256(sample, width: sample.count, height: 1)
+            return channelMap(histogram: hist, total: sample.count, lowPct: lowPct, highPct: highPct)
         }
-
-        let mapR = channelMap(histogram: histR, total: samples, lowPct: lowPct, highPct: highPct)
-        let mapG = channelMap(histogram: histG, total: samples, lowPct: lowPct, highPct: highPct)
-        let mapB = channelMap(histogram: histB, total: samples, lowPct: lowPct, highPct: highPct)
-
-        mapR.withUnsafeBufferPointer { r in
-        mapG.withUnsafeBufferPointer { g in
-        mapB.withUnsafeBufferPointer { b in
-            pixels.withUnsafeMutableBufferPointer { out in
-                for i in 0..<count {
-                    let base = i * 4
-                    out[base] = r[Int(out[base])]
-                    out[base + 1] = g[Int(out[base + 1])]
-                    out[base + 2] = b[Int(out[base + 2])]
-                }
-            }
-        }}}
+        planes.apply(tables: table(planes.r), table(planes.g), table(planes.b))
     }
 
     /// Single stretch derived from a luminance histogram, applied as an RGB
     /// ratio so color is preserved. Used by the color-preserving intents.
     private func percentileStretchLuminance(
-        _ pixels: inout [UInt8], count: Int, lowPct: Float, highPct: Float
+        _ planes: inout PixelPlanes, lowPct: Float, highPct: Float
     ) {
-        guard count > 0 else { return }
-        var hist = [Int](repeating: 0, count: 256)
-        let stride = analysisStride(count)
-        var samples = 0
+        guard planes.count > 0 else { return }
+        let lum = planes.luminance()
+        let sample = Vec.sampled(lum, stride: analysisStride(planes.count))
+        let hist = Vec.histogram256(sample, width: sample.count, height: 1)
 
-        pixels.withUnsafeBufferPointer { src in
-            var i = 0
-            while i < count {
-                let base = i * 4
-                let r = Float(src[base]) / 255.0
-                let g = Float(src[base + 1]) / 255.0
-                let b = Float(src[base + 2]) / 255.0
-                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                hist[min(255, max(0, Int(l * 255.0)))] += 1
-                samples += 1
-                i += stride
-            }
-        }
-
-        let low = percentile(histogram: hist, total: samples, fraction: lowPct)
-        let high = percentile(histogram: hist, total: samples, fraction: highPct)
+        let low = percentile(histogram: hist, total: sample.count, fraction: lowPct)
+        let high = percentile(histogram: hist, total: sample.count, fraction: highPct)
         let range = high - low
         guard range > 0.02 else { return }
-        let scale = 1.0 / range
 
-        pixels.withUnsafeMutableBufferPointer { out in
-            for i in 0..<count {
-                let base = i * 4
-                let r = Float(out[base]) / 255.0
-                let g = Float(out[base + 1]) / 255.0
-                let b = Float(out[base + 2]) / 255.0
-                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                let newL = min(1, max(0, (l - low) * scale))
-                if l > 0.001 {
-                    let ratio = newL / l
-                    out[base] = clampNormalizedByte(r * ratio)
-                    out[base + 1] = clampNormalizedByte(g * ratio)
-                    out[base + 2] = clampNormalizedByte(b * ratio)
-                } else {
-                    let mapped = clampNormalizedByte(newL)
-                    out[base] = mapped
-                    out[base + 1] = mapped
-                    out[base + 2] = mapped
-                }
-            }
-        }
+        let newL = Vec.clipped(Vec.affine(lum, scale: 1 / range, offset: -low / range))
+        planes.multiply(by: Vec.ratio(newL: newL, overL: lum))
     }
 
-    /// Builds a 256-entry lookup table mapping each input byte to its
+    /// Builds a 256-entry lookup table mapping each input level to its
     /// percentile-stretched value for one channel.
     private func channelMap(
         histogram: [Int], total: Int, lowPct: Float, highPct: Float
-    ) -> [UInt8] {
+    ) -> [Float] {
         let low = percentile(histogram: histogram, total: total, fraction: lowPct)
         let high = percentile(histogram: histogram, total: total, fraction: highPct)
         let range = high - low
         guard range > 0.02 else {
-            return (0...255).map { UInt8($0) }
+            return (0...255).map { Float($0) / 255 }
         }
         let scale = 1.0 / range
         return (0...255).map { value in
-            clampNormalizedByte((Float(value) / 255.0 - low) * scale)
+            min(1, max(0, (Float(value) / 255.0 - low) * scale))
         }
     }
 
@@ -455,6 +404,14 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         return 1
     }
 
+    // MARK: - Stage: CLAHE
+
+    private func applyCLAHE(_ clahe: CLAHEProcessor, to planes: inout PixelPlanes) {
+        let lum = planes.luminance()
+        let newL = clahe.equalized(lum, width: planes.width, height: planes.height)
+        planes.multiply(by: Vec.ratio(newL: newL, overL: lum))
+    }
+
     // MARK: - Stage: Homomorphic Filter
 
     /// Homomorphic filtering: in the log-luminance domain, attenuate the
@@ -463,34 +420,20 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     /// (reflectance — the actual scene detail). Color is preserved by scaling
     /// RGB by the resulting luminance ratio.
     ///
-    /// The illumination field is estimated entirely on the CPU: block-average
-    /// the log-luminance into a small grid, smooth it, then bilinearly upsample
-    /// per pixel — avoiding a full-resolution Gaussian blur and its readback.
+    /// The illumination field is estimated by block-averaging the
+    /// log-luminance into a small grid, smoothing it, and bilinearly
+    /// upsampling per row — avoiding a full-resolution Gaussian blur.
     private func homomorphic(
-        _ pixels: inout [UInt8], width: Int, height: Int,
+        _ planes: inout PixelPlanes,
         lowGain: Float, highGain: Float, blurFraction: Float
     ) {
-        let count = width * height
+        let width = planes.width, height = planes.height
+        let count = planes.count
         guard count > 0 else { return }
         let eps: Float = 0.01
 
-        var luma = [Float](repeating: 0, count: count)
-        var logL = [Float](repeating: 0, count: count)
-        pixels.withUnsafeBufferPointer { src in
-            luma.withUnsafeMutableBufferPointer { lm in
-                logL.withUnsafeMutableBufferPointer { lg in
-                    for i in 0..<count {
-                        let base = i * 4
-                        let r = Float(src[base]) / 255.0
-                        let g = Float(src[base + 1]) / 255.0
-                        let b = Float(src[base + 2]) / 255.0
-                        let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                        lm[i] = l
-                        lg[i] = log(l + eps)
-                    }
-                }
-            }
-        }
+        let lum = planes.luminance()
+        let logL = Vec.log(Vec.affine(lum, scale: 1, offset: eps))
 
         // Estimate illumination: block-average log-luminance into a small grid.
         let cell = max(8, Int(Double(min(width, height)) * Double(blurFraction)))
@@ -499,68 +442,90 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         var field = [Float](repeating: 0, count: fieldW * fieldH)
         var counts = [Int](repeating: 0, count: fieldW * fieldH)
         logL.withUnsafeBufferPointer { lg in
-            for y in 0..<height {
-                let fy = min(fieldH - 1, y / cell)
-                let rowBase = y * width
-                let fieldRow = fy * fieldW
-                for x in 0..<width {
-                    let fx = min(fieldW - 1, x / cell)
-                    let fi = fieldRow + fx
-                    field[fi] += lg[rowBase + x]
-                    counts[fi] += 1
+            var rowSum = [Float](repeating: 0, count: width)
+            var fy = 0
+            var rowsInBand = 0
+            func flushBand() {
+                guard rowsInBand > 0 else { return }
+                for fx in 0..<fieldW {
+                    let x0 = fx * cell, x1 = min(width, x0 + cell)
+                    var sum: Float = 0
+                    rowSum.withUnsafeBufferPointer { rs in
+                        vDSP_sve(rs.baseAddress! + x0, 1, &sum, vDSP_Length(x1 - x0))
+                    }
+                    field[fy * fieldW + fx] += sum
+                    counts[fy * fieldW + fx] += (x1 - x0) * rowsInBand
                 }
+                var zero: Float = 0
+                vDSP_vfill(&zero, &rowSum, 1, vDSP_Length(width))
+                rowsInBand = 0
             }
+            for y in 0..<height {
+                let bandOfRow = min(fieldH - 1, y / cell)
+                if bandOfRow != fy { flushBand(); fy = bandOfRow }
+                vDSP_vadd(rowSum, 1, lg.baseAddress! + y * width, 1, &rowSum, 1, vDSP_Length(width))
+                rowsInBand += 1
+            }
+            flushBand()
         }
         for i in 0..<field.count where counts[i] > 0 { field[i] /= Float(counts[i]) }
         field = smoothField(field, width: fieldW, height: fieldH)
 
-        // Apply, bilinearly upsampling the illumination field (cell centers).
+        // Bilinearly upsample the field (cell centres) to a full-size plane,
+        // one vDSP row at a time using gathers on precomputed column indices.
         let halfCell = Float(cell) / 2
-        pixels.withUnsafeMutableBufferPointer { out in
-            luma.withUnsafeBufferPointer { lm in
-            logL.withUnsafeBufferPointer { lg in
-            field.withUnsafeBufferPointer { fld in
+        var gx0 = [vDSP_Length](repeating: 1, count: width)
+        var gx1 = [vDSP_Length](repeating: 1, count: width)
+        var wx = [Float](repeating: 0, count: width)
+        for x in 0..<width {
+            let gx = (Float(x) - halfCell + 0.5) / Float(cell)
+            let c0 = max(0, min(fieldW - 1, Int(gx.rounded(.down))))
+            let c1 = max(0, min(fieldW - 1, c0 + 1))
+            gx0[x] = vDSP_Length(c0 + 1)   // vDSP_vgathr indices are 1-based
+            gx1[x] = vDSP_Length(c1 + 1)
+            wx[x] = max(0, min(1, gx - Float(c0)))
+        }
+        var low = [Float](repeating: 0, count: count)
+        var a0 = [Float](repeating: 0, count: width)
+        var a1 = [Float](repeating: 0, count: width)
+        var top = [Float](repeating: 0, count: width)
+        var bottom = [Float](repeating: 0, count: width)
+        let n = vDSP_Length(width)
+        field.withUnsafeBufferPointer { fld in
+            low.withUnsafeMutableBufferPointer { out in
                 for y in 0..<height {
                     let gy = (Float(y) - halfCell + 0.5) / Float(cell)
-                    let gy0 = max(0, min(fieldH - 1, Int(floor(gy))))
-                    let gy1 = max(0, min(fieldH - 1, gy0 + 1))
-                    let wy = max(0, min(1, gy - Float(gy0)))
-                    let rowBase = y * width
-                    for x in 0..<width {
-                        let gx = (Float(x) - halfCell + 0.5) / Float(cell)
-                        let gx0 = max(0, min(fieldW - 1, Int(floor(gx))))
-                        let gx1 = max(0, min(fieldW - 1, gx0 + 1))
-                        let wx = max(0, min(1, gx - Float(gx0)))
-
-                        let f00 = fld[gy0 * fieldW + gx0]
-                        let f01 = fld[gy0 * fieldW + gx1]
-                        let f10 = fld[gy1 * fieldW + gx0]
-                        let f11 = fld[gy1 * fieldW + gx1]
-                        let top = f00 * (1 - wx) + f01 * wx
-                        let bottom = f10 * (1 - wx) + f11 * wx
-                        let low = top * (1 - wy) + bottom * wy
-
-                        let idx = rowBase + x
-                        let high = lg[idx] - low
-                        let newLog = lowGain * low + highGain * high
-                        let newL = max(0, exp(newLog) - eps)
-                        let l = lm[idx]
-                        let base = idx * 4
-                        if l > 0.001 {
-                            let ratio = newL / l
-                            out[base] = clampNormalizedByte(Float(out[base]) / 255.0 * ratio)
-                            out[base + 1] = clampNormalizedByte(Float(out[base + 1]) / 255.0 * ratio)
-                            out[base + 2] = clampNormalizedByte(Float(out[base + 2]) / 255.0 * ratio)
-                        } else {
-                            let mapped = clampNormalizedByte(newL)
-                            out[base] = mapped
-                            out[base + 1] = mapped
-                            out[base + 2] = mapped
-                        }
-                    }
+                    let r0 = max(0, min(fieldH - 1, Int(gy.rounded(.down))))
+                    let r1 = max(0, min(fieldH - 1, r0 + 1))
+                    var wy = max(0, min(1, gy - Float(r0)))
+                    // top = f[r0][gx0] + (f[r0][gx1] - f[r0][gx0]) * wx
+                    vDSP_vgathr(fld.baseAddress! + r0 * fieldW, gx0, 1, &a0, 1, n)
+                    vDSP_vgathr(fld.baseAddress! + r0 * fieldW, gx1, 1, &a1, 1, n)
+                    vDSP_vsub(a0, 1, a1, 1, &a1, 1, n)
+                    vDSP_vmul(a1, 1, wx, 1, &a1, 1, n)
+                    vDSP_vadd(a0, 1, a1, 1, &top, 1, n)
+                    vDSP_vgathr(fld.baseAddress! + r1 * fieldW, gx0, 1, &a0, 1, n)
+                    vDSP_vgathr(fld.baseAddress! + r1 * fieldW, gx1, 1, &a1, 1, n)
+                    vDSP_vsub(a0, 1, a1, 1, &a1, 1, n)
+                    vDSP_vmul(a1, 1, wx, 1, &a1, 1, n)
+                    vDSP_vadd(a0, 1, a1, 1, &bottom, 1, n)
+                    // low = top + (bottom - top) * wy
+                    vDSP_vsub(top, 1, bottom, 1, &bottom, 1, n)
+                    vDSP_vsmul(bottom, 1, &wy, &bottom, 1, n)
+                    vDSP_vadd(top, 1, bottom, 1, out.baseAddress! + y * width, 1, n)
                 }
-            }}}
+            }
         }
+
+        // newLog = lowGain * low + highGain * (logL - low); newL = exp(newLog) - eps
+        var newLog = [Float](repeating: 0, count: count)
+        let cn = vDSP_Length(count)
+        vDSP_vsub(low, 1, logL, 1, &newLog, 1, cn)          // logL - low
+        var hg = highGain, lg = lowGain
+        vDSP_vsmul(newLog, 1, &hg, &newLog, 1, cn)
+        vDSP_vsma(low, 1, &lg, newLog, 1, &newLog, 1, cn)   // + lowGain * low
+        let newL = Vec.clipped(Vec.affine(Vec.exp(newLog), scale: 1, offset: -eps), low: 0, high: .greatestFiniteMagnitude)
+        planes.multiply(by: Vec.ratio(newL: newL, overL: lum))
     }
 
     /// A single separable 1-2-1 pass to take the blockiness off the downsampled
@@ -568,29 +533,21 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     private func smoothField(_ field: [Float], width: Int, height: Int) -> [Float] {
         guard width > 2, height > 2 else { return field }
         var temp = field
-        field.withUnsafeBufferPointer { src in
-            temp.withUnsafeMutableBufferPointer { dst in
-                for y in 0..<height {
-                    let base = y * width
-                    for x in 0..<width {
-                        let x0 = max(0, x - 1)
-                        let x1 = min(width - 1, x + 1)
-                        dst[base + x] = (src[base + x0] + 2 * src[base + x] + src[base + x1]) / 4
-                    }
-                }
+        for y in 0..<height {
+            let base = y * width
+            for x in 0..<width {
+                let x0 = max(0, x - 1)
+                let x1 = min(width - 1, x + 1)
+                temp[base + x] = (field[base + x0] + 2 * field[base + x] + field[base + x1]) / 4
             }
         }
         var result = field
-        temp.withUnsafeBufferPointer { src in
-            result.withUnsafeMutableBufferPointer { dst in
-                for y in 0..<height {
-                    let y0 = max(0, y - 1) * width
-                    let y1 = min(height - 1, y + 1) * width
-                    let base = y * width
-                    for x in 0..<width {
-                        dst[base + x] = (src[y0 + x] + 2 * src[base + x] + src[y1 + x]) / 4
-                    }
-                }
+        for y in 0..<height {
+            let y0 = max(0, y - 1) * width
+            let y1 = min(height - 1, y + 1) * width
+            let base = y * width
+            for x in 0..<width {
+                result[base + x] = (temp[y0 + x] + 2 * temp[base + x] + temp[y1 + x]) / 4
             }
         }
         return result
@@ -612,99 +569,28 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     // MARK: - Luminance Statistics
 
     /// Mean and standard deviation of Rec. 709 luminance across a strided
-    /// sample of an RGBA buffer.
-    private func luminanceStats(_ pixels: [UInt8]) -> (mean: Float, std: Float) {
-        let count = pixels.count / 4
-        guard count > 0 else { return (0, 0) }
-        let stride = analysisStride(count)
-        var sum: Float = 0
-        var sumSq: Float = 0
-        var samples = 0
-        pixels.withUnsafeBufferPointer { src in
-            var i = 0
-            while i < count {
-                let base = i * 4
-                let r = Float(src[base]) / 255.0
-                let g = Float(src[base + 1]) / 255.0
-                let b = Float(src[base + 2]) / 255.0
-                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                sum += l
-                sumSq += l * l
-                samples += 1
-                i += stride
-            }
-        }
-        let mean = sum / Float(samples)
-        let variance = max(0, sumSq / Float(samples) - mean * mean)
-        return (mean, variance.squareRoot())
-    }
-
-    /// Fraction of pixels whose luminance is at or above the near-clipping
-    /// threshold (0.97), across a strided sample. A rough "how blown out is this
-    /// eye" measure used to pick the exposure-match reference.
-    private func clipFraction(_ pixels: [UInt8]) -> Float {
-        let count = pixels.count / 4
-        guard count > 0 else { return 0 }
-        let stride = analysisStride(count)
-        var clipped = 0
-        var samples = 0
-        pixels.withUnsafeBufferPointer { src in
-            var i = 0
-            while i < count {
-                let base = i * 4
-                let r = Float(src[base]) / 255.0
-                let g = Float(src[base + 1]) / 255.0
-                let b = Float(src[base + 2]) / 255.0
-                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                if l >= 0.97 { clipped += 1 }
-                samples += 1
-                i += stride
-            }
-        }
-        return samples > 0 ? Float(clipped) / Float(samples) : 0
+    /// sample of a luminance plane.
+    private func luminanceStats(_ lum: [Float]) -> (mean: Float, std: Float) {
+        guard !lum.isEmpty else { return (0, 0) }
+        let stride = analysisStride(lum.count)
+        let mean = Vec.mean(lum, stride: stride)
+        let meanSq = Vec.meanOfSquares(lum, stride: stride)
+        return (mean, max(0, meanSq - mean * mean).squareRoot())
     }
 
     /// Remaps one image's luminance via `(l - sourceMean) * gain + targetMean`,
     /// preserving color by scaling RGB by the luminance ratio.
     private func applyLuminanceAffine(
-        _ cgImage: CGImage, pixels: [UInt8],
+        _ cgImage: CGImage, planes: PixelPlanes, luminance: [Float],
         sourceMean: Float, sourceStd: Float,
         targetMean: Float, targetStd: Float
     ) -> CGImage? {
-        let count = pixels.count / 4
-        guard count > 0 else { return cgImage }
+        guard planes.count > 0 else { return cgImage }
         let gain = sourceStd > 0.001 ? targetStd / sourceStd : 1.0
-
-        var output = [UInt8](repeating: 0, count: pixels.count)
-        pixels.withUnsafeBufferPointer { src in
-            output.withUnsafeMutableBufferPointer { out in
-                for i in 0..<count {
-                    let base = i * 4
-                    let r = Float(src[base]) / 255.0
-                    let g = Float(src[base + 1]) / 255.0
-                    let b = Float(src[base + 2]) / 255.0
-                    let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                    let newL = min(1, max(0, (l - sourceMean) * gain + targetMean))
-                    if l > 0.001 {
-                        let ratio = newL / l
-                        out[base] = clampNormalizedByte(r * ratio)
-                        out[base + 1] = clampNormalizedByte(g * ratio)
-                        out[base + 2] = clampNormalizedByte(b * ratio)
-                    } else {
-                        let mapped = clampNormalizedByte(newL)
-                        out[base] = mapped
-                        out[base + 1] = mapped
-                        out[base + 2] = mapped
-                    }
-                    out[base + 3] = src[base + 3]
-                }
-            }
-        }
-
-        return makeRGBA(
-            output, width: cgImage.width, height: cgImage.height,
-            colorSpace: cgImage.colorSpace
-        )
+        let newL = Vec.clipped(Vec.affine(luminance, scale: gain, offset: targetMean - sourceMean * gain))
+        var out = planes
+        out.multiply(by: Vec.ratio(newL: newL, overL: luminance))
+        return makeRGBA(out.rgba(), width: planes.width, height: planes.height, colorSpace: cgImage.colorSpace)
     }
 
     // MARK: - Pixel Helpers
@@ -713,6 +599,11 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     /// needed. Caps analysis passes at ~300k samples regardless of resolution.
     private func analysisStride(_ count: Int) -> Int {
         max(1, count / 300_000)
+    }
+
+    private func readPlanes(_ cgImage: CGImage) -> PixelPlanes? {
+        guard let rgba = readRGBA(cgImage) else { return nil }
+        return PixelPlanes(rgba: rgba, width: cgImage.width, height: cgImage.height)
     }
 
     private func readRGBA(_ cgImage: CGImage) -> [UInt8]? {
@@ -753,9 +644,5 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
             provider: provider,
             decode: nil, shouldInterpolate: true, intent: .defaultIntent
         )
-    }
-
-    private func clampNormalizedByte(_ value: Float) -> UInt8 {
-        UInt8(max(0, min(255, Int(value * 255.0))))
     }
 }

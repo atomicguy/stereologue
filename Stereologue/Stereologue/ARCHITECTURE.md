@@ -199,9 +199,20 @@ half-frames), scales the shift back up, and applies vertical + rotation only.
 
 ### `CLAHEProcessor` — `nonisolated struct`
 
-Pure-value contrast-limited adaptive histogram equalization operating in
-place on an RGBA8 buffer. `nonisolated` so the (otherwise-MainActor-by-default)
-struct is callable from `RestorationPipeline` off the main actor.
+Pure-value contrast-limited adaptive histogram equalization on a luminance
+plane: per-tile CDFs become 256-entry lookup tables, and each rectangular
+region between four tile centres is processed with vImage table lookups and
+vDSP blends rather than a per-pixel loop. `nonisolated` so it's callable from
+`RestorationPipeline` off the main actor.
+
+### `PixelPlanes` / `Vec` — Accelerate working buffer
+
+All tone kernels operate on `PixelPlanes` (planar Float32 RGB in 0…1 plus
+the alpha bytes) via the `Vec` wrappers over vDSP/vImage/vForce. Every
+whole-image operation is a library call, which is what keeps the pipeline at
+~100 ms per eye even at Debug optimization (scalar Swift loops were ~12×
+slower there). Color preservation is one primitive: compute a new luminance
+plane, then multiply all three channels by `newL / max(L, 0.001)`.
 
 ### `ImagePipelineConfig` — Nuke configuration
 

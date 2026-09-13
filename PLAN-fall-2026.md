@@ -187,7 +187,18 @@ stereo fusion.
 
 ---
 
-## Phase 4 — Kernels to Accelerate / Core Image (3–5 days)
+## Phase 4 — Kernels to Accelerate / Core Image (3–5 days) — ✅ implemented
+
+Status: shipped on `fall-2026-revision`. Profiling first (a per-stage
+`restoreTimed` API plus a `swiftc -O` harness on an 1113 px eye) showed the
+scalar pipeline took 50 ms per eye for Enhance in Release but 1190 ms at
+Debug optimization — so the on-device slowness was largely Debug builds.
+The kernels now run on planar Float32 RGB (`PixelPlanes`) through
+vImage/vDSP/vForce: Enhance 33 ms Release / 99 ms Debug, Preserve Tone
+27 / 89, Even Lighting 18 / 63 (this Mac, M-series). CLAHE (region-wise
+table lookups + vector blends) is the largest remaining stage at ~12 ms;
+a Metal kernel would be the next step if it matters. Golden renders stayed
+within the 2 % tolerance without re-recording.
 
 Goal: the classical passes run in tens of milliseconds at full resolution, in
 Debug and Release, on Vision Pro.
