@@ -142,7 +142,7 @@ stereo fusion.
    Rectification registration (and any future disparity matching) runs on
    ≤ 640 px copies; the transform / field is upsampled and applied at full
    size.
-3. **Learned scratch detector (2–3 days, spike first).** — 🔬 spike done, verdict open
+3. **Learned scratch detector (2–3 days, spike first).** — ⏸ paused: on real cards it flags sugar cane, floor seams, and roots as defects
    Spike results (`tools/scratch-detector/`, run with uv): the U-Net converts
    to Core ML (FP16, 72 MB, static 256 or 512 px input — flexible shapes
    crash the Core ML CPU backend on macOS 26.6) and matches PyTorch to
@@ -211,7 +211,11 @@ Instruments, convert the top three time sinks first, re-profile.
 
 ---
 
-## Phase 5 — Housekeeping (1 day)
+## Phase 5 — Housekeeping (1 day) — ✅ implemented
+
+Status: shipped on `fall-2026-revision`. The migration/curation tools stay in
+the app folder but compile only in Debug (simpler than a separate target and
+keeps them next to the models they read).
 
 - Remove `predictions_with_metadata.parquet` from the app target's Resources
   (it is 8.4 MB shipped for nothing). Keep it in the repo next to

@@ -1,3 +1,6 @@
+// Offline curation/migration tooling — Debug builds only, never in the shipping binary.
+#if DEBUG
+
 //
 //  PlaceDuplicateFinder.swift
 //  Stereologue
@@ -221,3 +224,5 @@ struct PlaceDuplicateFinder {
         return sum
     }
 }
+
+#endif

@@ -317,7 +317,7 @@ nonisolated struct StereoPairRenderer: Sendable {
         try Task.checkCancellation()
 
         // 5. Resize to matching dimensions (required for spatial photos).
-        return matchDimensions(left: leftCGImage, right: rightCGImage)
+        return Self.matchDimensions(left: leftCGImage, right: rightCGImage)
     }
 
     // MARK: - Image Cropping
@@ -334,37 +334,32 @@ nonisolated struct StereoPairRenderer: Sendable {
         scaleX: Double = 1.0,
         scaleY: Double = 1.0
     ) throws -> CGImage {
-        let scaledX = detection.x * scaleX
-        let scaledY = detection.y * scaleY
-        let scaledW = detection.width * scaleX
-        let scaledH = detection.height * scaleY
-
-        let cropRect = CGRect(
-            x: scaledX - scaledW / 2,
-            y: scaledY - scaledH / 2,
-            width: scaledW,
-            height: scaledH
-        )
-
-        logger.debug("\(label) cropRect: \(cropRect.debugDescription)")
-
-        // Clamp to image bounds
-        let imageBounds = CGRect(
-            x: 0, y: 0,
-            width: source.width,
-            height: source.height
-        )
-        let clampedRect = cropRect.intersection(imageBounds)
-
-        guard !clampedRect.isEmpty,
-              let cropped = source.cropping(to: clampedRect) else {
+        guard let rect = Self.cropRect(
+            for: detection, scaleX: scaleX, scaleY: scaleY,
+            in: CGSize(width: source.width, height: source.height)
+        ), let cropped = source.cropping(to: rect) else {
             throw SpatialPhotoError.cropFailed(label)
         }
-
-        logger.debug(
-            "Cropped \(label) image: \(cropped.width)x\(cropped.height)"
-        )
+        logger.debug("Cropped \(label) image: \(cropped.width)x\(cropped.height)")
         return cropped
+    }
+
+    /// The pixel rectangle a detection selects in an image of `size`, or
+    /// `nil` if it falls entirely outside. Pure geometry, exposed for tests.
+    static func cropRect(
+        for detection: ImageDetection,
+        scaleX: Double, scaleY: Double,
+        in size: CGSize
+    ) -> CGRect? {
+        let w = detection.width * scaleX
+        let h = detection.height * scaleY
+        let rect = CGRect(
+            x: detection.x * scaleX - w / 2,
+            y: detection.y * scaleY - h / 2,
+            width: w, height: h
+        )
+        let clamped = rect.intersection(CGRect(origin: .zero, size: size))
+        return clamped.isEmpty ? nil : clamped
     }
 
     /// Resamples an image by `factor` (< 1) with high-quality interpolation.
@@ -385,7 +380,7 @@ nonisolated struct StereoPairRenderer: Sendable {
 
     /// Ensures left and right images have identical pixel dimensions
     /// by cropping to the smaller dimension on each axis.
-    private func matchDimensions(
+    static func matchDimensions(
         left: CGImage, right: CGImage
     ) -> (CGImage, CGImage) {
         let targetWidth = min(left.width, right.width)

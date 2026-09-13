@@ -311,6 +311,81 @@ struct StereologueTests {
         }
     }
 
+    // MARK: - Pure geometry and formatting
+
+    @Test func cropRectCentersScalesAndClampsDetections() throws {
+        // Detections are centre + size in a 760-wide space; the source is 2560 wide.
+        let scale = 2560.0 / 760.0
+        let detection = ImageDetection(x: 218, y: 180, width: 314, height: 320)
+        let rect = try #require(StereoPairRenderer.cropRect(
+            for: detection, scaleX: scale, scaleY: scale, in: CGSize(width: 2560, height: 1335)
+        ))
+        #expect(abs(rect.minX - (218 - 157) * scale) < 1e-9)
+        #expect(abs(rect.width - 314 * scale) < 1e-9)
+        #expect(abs(rect.height - 320 * scale) < 1e-9)
+
+        // A box hanging off the left edge is clamped to the image.
+        let edge = StereoPairRenderer.cropRect(
+            for: ImageDetection(x: 10, y: 100, width: 100, height: 100),
+            scaleX: 1, scaleY: 1, in: CGSize(width: 760, height: 400)
+        )
+        #expect(edge == CGRect(x: 0, y: 50, width: 60, height: 100))
+
+        // Entirely outside → nil, so the caller can report a crop failure.
+        #expect(StereoPairRenderer.cropRect(
+            for: ImageDetection(x: 900, y: 100, width: 50, height: 50),
+            scaleX: 1, scaleY: 1, in: CGSize(width: 760, height: 400)
+        ) == nil)
+    }
+
+    @Test func matchDimensionsCropsToTheSmallerEye() throws {
+        let left = try #require(Self.makeTestImage(width: 300, height: 200))
+        let right = try #require(Self.makeTestImage(width: 280, height: 210))
+
+        let (l, r) = StereoPairRenderer.matchDimensions(left: left, right: right)
+        #expect(l.width == 280 && l.height == 200)
+        #expect(r.width == 280 && r.height == 200)
+
+        let (sameL, sameR) = StereoPairRenderer.matchDimensions(left: left, right: left)
+        #expect(sameL === left && sameR === left, "equal sizes pass through untouched")
+    }
+
+    @Test @MainActor func safeShareFilenameStripsPunctuationAndBounds() {
+        #expect(CardPagerView.safeShareFilename(from: "Brooklyn Bridge, N.Y. \"East River\"") == "Brooklyn Bridge N Y East River")
+        #expect(CardPagerView.safeShareFilename(from: "   ") == "Spatial Photo")
+        #expect(CardPagerView.safeShareFilename(from: String(repeating: "a", count: 200)).count == 80)
+        #expect(!CardPagerView.safeShareFilename(from: "Trailing period.").hasSuffix("."))
+    }
+
+    // MARK: - Catalog queries
+
+    @Test func yearCountsCoverEveryDatedCardInAscendingOrder() async throws {
+        let container = try Self.makeBundledCatalogContainer()
+        let service = CatalogQueryService(modelContainer: container)
+
+        let groups = await service.yearCounts()
+
+        #expect(groups.count > 50)
+        #expect(groups.map(\.year) == groups.map(\.year).sorted())
+        #expect(groups.allSatisfy { $0.count > 0 })
+        let dated = await service.cardRows(
+            matching: #Predicate { $0.yearStart != nil },
+            sortBy: [SortDescriptor(\.uuid)], offset: 0, limit: 100_000
+        )
+        #expect(groups.map(\.count).reduce(0, +) == dated.count)
+    }
+
+    @Test @MainActor func mainContextCardsMatchingPreservesOrder() async throws {
+        let container = try Self.makeBundledCatalogContainer()
+        let service = CatalogQueryService(modelContainer: container)
+        let page = await service.cardRows(matching: nil, sortBy: PagedCardGridView.defaultSort, offset: 0, limit: 5)
+        let requested = Array(page.map(\.uuid).reversed())
+
+        let cards = container.mainContext.cards(matching: requested + ["missing"])
+
+        #expect(cards.map(\.uuid) == requested)
+    }
+
     @Test func parseYearReadsLeadingFourDigits() {
         #expect(StereoCard.parseYear(from: "1871-08") == 1871)
         #expect(StereoCard.parseYear(from: "1850") == 1850)

@@ -60,3 +60,7 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# SQLite WAL/shared-memory sidecars of the bundled catalog store
+*.store-shm
+*.store-wal

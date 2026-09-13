@@ -10,7 +10,6 @@
 		5C12D5792F70F5A40008F231 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = 5C12D5782F70F5A40008F231 /* Nuke */; };
 		5C12D57B2F70F5A40008F231 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 5C12D57A2F70F5A40008F231 /* NukeUI */; };
 		5C336DE92E1C7A8800D9927D /* StackIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5C336DE82E1C7A8800D9927D /* StackIcon.icon */; };
-		5C77077D2F70A7A000E98B6C /* predictions_with_metadata.parquet in Resources */ = {isa = PBXBuildFile; fileRef = 5C77077C2F70A7A000E98B6C /* predictions_with_metadata.parquet */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -244,7 +243,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5C77077D2F70A7A000E98B6C /* predictions_with_metadata.parquet in Resources */,
 				5C336DE92E1C7A8800D9927D /* StackIcon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

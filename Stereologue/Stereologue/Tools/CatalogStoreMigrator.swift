@@ -1,3 +1,6 @@
+// Offline curation/migration tooling — Debug builds only, never in the shipping binary.
+#if DEBUG
+
 //
 //  CatalogStoreMigrator.swift
 //  Stereologue
@@ -346,3 +349,5 @@ enum MigrationError: LocalizedError {
         }
     }
 }
+
+#endif
