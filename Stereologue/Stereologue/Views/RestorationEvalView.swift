@@ -70,16 +70,17 @@ struct RestorationEvalView: View {
         .task {
             do { evalSet = try RestorationEvalSet.load() } catch { loadError = error.localizedDescription }
         }
-        .frame(minWidth: 900, minHeight: 600)
     }
 
     // MARK: - Layout
 
+    /// A split view so the card list is a draggable, resizable column and the
+    /// comparison fills whatever window size the tool is given.
     private func content(_ evalSet: RestorationEvalSet) -> some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             cardList(evalSet)
-                .frame(width: 300)
-            Divider()
+                .navigationSplitViewColumnWidth(min: 260, ideal: 360, max: 640)
+        } detail: {
             VStack(spacing: 12) {
                 controls
                 comparison
@@ -95,8 +96,8 @@ struct RestorationEvalView: View {
                 Section(group.category.capitalized) {
                     ForEach(group.cards) { card in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(card.title).lineLimit(2)
-                            Text(card.note).font(.caption).foregroundStyle(.secondary)
+                            Text(card.title).lineLimit(3)
+                            Text(card.note).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                         }
                         .tag(card)
                     }

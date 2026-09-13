@@ -13,6 +13,9 @@ struct LibraryView: View {
     @State private var debouncedSearchText = ""
     #if DEBUG
     @State private var showRestorationEval = false
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
     #endif
 
     var body: some View {
@@ -23,15 +26,23 @@ struct LibraryView: View {
             .toolbar {
                 ToolbarItem(placement: .secondaryAction) {
                     Button("Restoration Eval", systemImage: "flask") {
+                        // macOS sheets are fixed-size and clip; the tool gets a
+                        // resizable window of its own there (see StereologueApp).
+                        #if os(macOS)
+                        openWindow(id: "restoration-eval")
+                        #else
                         showRestorationEval = true
+                        #endif
                     }
                 }
             }
+            #if !os(macOS)
             .sheet(isPresented: $showRestorationEval) {
                 NavigationStack {
                     RestorationEvalView()
                 }
             }
+            #endif
             #endif
             // Debounce: a search runs a `localizedStandardContains` scan over
             // the whole 41K-card catalog (off the main actor, but still a full

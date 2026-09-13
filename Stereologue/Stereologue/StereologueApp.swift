@@ -152,6 +152,21 @@ struct StereologueApp: App {
                 }
         }
 
+        #if DEBUG && os(macOS)
+        // Debug-only restoration evaluation tool in its own resizable window.
+        Window("Restoration Eval", id: "restoration-eval") {
+            NavigationStack {
+                RestorationEvalView()
+            }
+            .modelContainer(catalogContainer)
+            .environment(\.userModelContext, userContainer.mainContext)
+            .environment(userDataService)
+            .environment(\.spatialPhotoService, spatialPhotoService)
+            .environment(\.catalogQueryService, catalogQueryService)
+        }
+        .defaultSize(width: 1200, height: 760)
+        #endif
+
         #if os(visionOS)
         WindowGroup(id: "spatial-photo") {
             SpatialPhotoView(spatialPhotoService: spatialPhotoService)
