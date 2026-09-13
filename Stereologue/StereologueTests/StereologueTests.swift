@@ -270,6 +270,47 @@ struct StereologueTests {
         return Double(total) / Double(pa.count / 4 * 3) / 255
     }
 
+    // MARK: - Paged rows
+
+    /// Several cells appearing in one frame each call `loadNextPage`. That
+    /// must fetch and append the next page exactly once, never duplicate a
+    /// row (duplicate `ForEach` ids stop the grid loading), and still reach
+    /// the end.
+    @Test @MainActor func pagedRowsLoadEachPageOnceUnderBurstRequests() async {
+        let total = 10
+        let loader = PagedCardRows(pageSize: 4) { offset, limit in
+            try? await Task.sleep(for: .milliseconds(20))
+            return (offset..<min(offset + limit, total)).map {
+                CardRow(uuid: "card-\($0)", title: "Card \($0)", frontImageID: nil, hasStereoDetections: true)
+            }
+        }
+        await loader.reload()
+        #expect(loader.rows.count == 4)
+
+        for _ in 0..<5 { loader.loadNextPage() }
+        await Self.settle(loader)
+        #expect(loader.rows.count == 8, "burst of requests must add one page")
+        #expect(Set(loader.rows.map(\.uuid)).count == loader.rows.count, "no duplicate rows")
+        #expect(!loader.reachedEnd)
+
+        loader.loadNextPage()
+        await Self.settle(loader)
+        #expect(loader.rows.count == total)
+        #expect(loader.reachedEnd)
+        #expect(loader.rows.map(\.uuid) == (0..<total).map { "card-\($0)" })
+
+        loader.loadNextPage()
+        await Self.settle(loader)
+        #expect(loader.rows.count == total, "no fetch past the end")
+    }
+
+    @MainActor
+    private static func settle(_ loader: PagedCardRows) async {
+        for _ in 0..<200 where loader.isLoadingPage {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     @Test func parseYearReadsLeadingFourDigits() {
         #expect(StereoCard.parseYear(from: "1871-08") == 1871)
         #expect(StereoCard.parseYear(from: "1850") == 1850)

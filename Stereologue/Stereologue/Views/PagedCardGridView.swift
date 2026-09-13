@@ -28,76 +28,48 @@ struct PagedCardGridView: View {
         SortDescriptor(\.title), SortDescriptor(\.uuid)
     ]
 
-    /// Cards fetched per page. Large enough that a wide window's first screen
-    /// is one round trip; small enough that the first page appears quickly.
-    private static let pageSize = 80
-
     @Environment(\.catalogQueryService) private var queryService
 
-    @State private var rows: [CardRow] = []
-    /// The `queryKey` the current `rows` were loaded for. Guards against
+    @State private var loader: PagedCardRows?
+    /// The `queryKey` the current loader was built for. Guards against
     /// reloading (and losing scroll position) when the grid merely reappears
     /// after a navigation pop.
     @State private var loadedKey: String?
-    @State private var reachedEnd = false
-    @State private var isLoadingPage = false
-    /// Bumped on every reset so a page that was in flight for an old query
-    /// is dropped when it lands.
-    @State private var generation = 0
 
     var body: some View {
         Group {
-            if loadedKey == nil {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            if let loader, loader.hasLoadedFirstPage {
                 CardGridView(
-                    rows: rows,
+                    rows: loader.rows,
                     emptyTitle: emptyTitle,
                     emptySystemImage: emptySystemImage,
                     emptyDescription: emptyDescription,
-                    onReachEnd: reachedEnd ? nil : { loadNextPage() }
+                    onReachEnd: loader.reachedEnd ? nil : { loader.loadNextPage() }
                 )
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .task(id: queryKey) {
             guard loadedKey != queryKey else { return }
-            await reload()
-        }
-    }
-
-    private func reload() async {
-        generation += 1
-        rows = []
-        reachedEnd = false
-        isLoadingPage = false
-        await loadPage(generation)
-    }
-
-    private func loadNextPage() {
-        guard !isLoadingPage, !reachedEnd else { return }
-        let current = generation
-        Task { await loadPage(current) }
-    }
-
-    private func loadPage(_ expectedGeneration: Int) async {
-        guard let queryService else {
             loadedKey = queryKey
-            reachedEnd = true
-            return
+            let loader = PagedCardRows(fetch: makeFetch())
+            self.loader = loader
+            await loader.reload()
         }
-        isLoadingPage = true
-        let page = await queryService.cardRows(
-            matching: predicate,
-            sortBy: sortBy,
-            offset: rows.count,
-            limit: Self.pageSize
-        )
-        guard expectedGeneration == generation else { return }
-        rows.append(contentsOf: page)
-        reachedEnd = page.count < Self.pageSize
-        loadedKey = queryKey
-        isLoadingPage = false
+    }
+
+    private func makeFetch() -> PagedCardRows.Fetch {
+        let predicate = predicate
+        let sortBy = sortBy
+        let queryService = queryService
+        return { offset, limit in
+            guard let queryService else { return [] }
+            return await queryService.cardRows(
+                matching: predicate, sortBy: sortBy, offset: offset, limit: limit
+            )
+        }
     }
 }
 
