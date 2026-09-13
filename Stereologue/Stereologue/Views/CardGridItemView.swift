@@ -10,7 +10,7 @@ import Nuke
 import NukeUI
 
 struct CardGridItemView: View {
-    let card: StereoCard
+    let row: CardRow
 
     /// Stereoview cards are roughly 7×3.5 inches, so ~2:1 aspect ratio for the front.
     private let aspectRatio: CGFloat = 1.6
@@ -26,8 +26,8 @@ struct CardGridItemView: View {
     /// the screen scale (→600px on a 2× display), exceeds the 300px source, and
     /// makes the resize a no-op — Nuke would still decode at native size, but
     /// pinning the bitmap to 300px keeps the memory cache's cost math healthy.
-    static func thumbnailRequest(for card: StereoCard) -> ImageRequest? {
-        guard let url = card.frontImageURL(quality: "r") else { return nil }
+    static func thumbnailRequest(for row: CardRow) -> ImageRequest? {
+        guard let url = row.frontImageURL(quality: "r") else { return nil }
         return ImageRequest(url: url, processors: [.resize(width: 300, unit: .pixels)])
     }
 
@@ -49,7 +49,7 @@ struct CardGridItemView: View {
 
     @ViewBuilder
     private var imageContent: some View {
-        if let request = Self.thumbnailRequest(for: card) {
+        if let request = Self.thumbnailRequest(for: row) {
             LazyImage(request: request) { state in
                 if let image = state.image {
                     image
@@ -69,7 +69,7 @@ struct CardGridItemView: View {
     }
 
     private var titleOverlay: some View {
-        Text(card.title)
+        Text(row.title)
             .font(.caption)
             .lineLimit(2)
             .padding(.horizontal, 8)
@@ -91,7 +91,7 @@ struct CardGridItemView: View {
 
 #if DEBUG
 #Preview(traits: .sizeThatFitsLayout) {
-    CardGridItemView(card: PreviewSampleData.sampleCard)
+    CardGridItemView(row: CardRow(PreviewSampleData.sampleCard))
         .frame(width: 240)
         .previewEnvironment()
 }

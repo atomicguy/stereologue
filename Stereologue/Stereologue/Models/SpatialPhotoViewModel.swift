@@ -12,8 +12,10 @@ import SwiftUI
 
 @Observable @MainActor
 final class SpatialPhotoViewModel {
-    /// All cards available for browsing in the spatial viewer.
-    var cards: [StereoCard] = []
+    /// All cards available for browsing in the spatial viewer, as lightweight
+    /// rows. The viewer resolves the full model only for the card on screen.
+    private(set) var rows: [CardRow] = []
+    private var indexByUUID: [String: Int] = [:]
 
     /// UUID of the currently displayed card.
     var currentCardUUID: String?
@@ -30,12 +32,16 @@ final class SpatialPhotoViewModel {
 
     // MARK: - Computed
 
-    var currentCard: StereoCard? {
-        cards.first { $0.uuid == currentCardUUID }
+    var currentRow: CardRow? {
+        currentIndex.map { rows[$0] }
     }
 
     var currentIndex: Int? {
-        cards.firstIndex { $0.uuid == currentCardUUID }
+        currentCardUUID.flatMap { indexByUUID[$0] }
+    }
+
+    func index(of uuid: String) -> Int? {
+        indexByUUID[uuid]
     }
 
     var hasPrevious: Bool {
@@ -45,35 +51,42 @@ final class SpatialPhotoViewModel {
 
     var hasNext: Bool {
         guard let idx = currentIndex else { return false }
-        return idx < cards.count - 1
+        return idx < rows.count - 1
     }
 
     // MARK: - Navigation
 
     func goToNext() {
-        guard let idx = currentIndex, idx < cards.count - 1 else { return }
+        guard let idx = currentIndex, idx < rows.count - 1 else { return }
         navigationDirection = .forward
-        currentCardUUID = cards[idx + 1].uuid
+        currentCardUUID = rows[idx + 1].uuid
     }
 
     func goToPrevious() {
         guard let idx = currentIndex, idx > 0 else { return }
         navigationDirection = .backward
-        currentCardUUID = cards[idx - 1].uuid
+        currentCardUUID = rows[idx - 1].uuid
     }
 
     // MARK: - Setup
 
-    func present(cards: [StereoCard], initialCardUUID: String) {
-        self.cards = cards
-        self.currentCardUUID = initialCardUUID
-        self.navigationDirection = .forward
-        self.isPresented = true
+    func present(rows: [CardRow], initialCardUUID: String) {
+        self.rows = rows
+        var index: [String: Int] = [:]
+        index.reserveCapacity(rows.count)
+        for (i, row) in rows.enumerated() where index[row.uuid] == nil {
+            index[row.uuid] = i
+        }
+        indexByUUID = index
+        currentCardUUID = initialCardUUID
+        navigationDirection = .forward
+        isPresented = true
     }
 
     func dismiss() {
         isPresented = false
-        cards = []
+        rows = []
+        indexByUUID = [:]
         currentCardUUID = nil
     }
 }

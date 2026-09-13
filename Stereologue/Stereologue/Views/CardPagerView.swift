@@ -5,12 +5,19 @@
 //  Horizontally-paging wrapper around CardDetailView that lets the user
 //  swipe left/right to browse adjacent cards from the originating grid.
 //
+//  The pager works in `CardRow`s (a Sendable value per card). Only the page
+//  actually on screen — and its toolbar — resolves the full `StereoCard`
+//  model, by an indexed UUID fetch, so entering the pager from a 41K-row
+//  grid costs the same as from a 10-row one.
+//
 
 import SwiftUI
+import SwiftData
 import Nuke
 
 struct CardPagerView: View {
-    let initialCard: StereoCard
+    let initialRow: CardRow
+    @Environment(\.modelContext) private var modelContext
     @Environment(CardListContext.self) private var cardListContext
     @Environment(UserDataService.self) private var userDataService
     @Environment(\.spatialPhotoService) private var spatialPhotoService
@@ -23,8 +30,13 @@ struct CardPagerView: View {
         destination: .memoryCache
     )
 
-    @State private var cards: [StereoCard]?
+    /// Snapshot of the originating grid's rows, taken once on first appearance
+    /// so the pager isn't disturbed by the grid loading further pages.
+    @State private var rows: [CardRow]?
+    @State private var indexByUUID: [String: Int] = [:]
     @State private var currentCardUUID: String?
+    /// The full model for the page on screen; drives the toolbar and sharing.
+    @State private var currentCard: StereoCard?
     @State private var isFavorite = false
     @State private var showWiggleStereo = false
     @State private var shareItem: URL?
@@ -35,38 +47,58 @@ struct CardPagerView: View {
     @Environment(\.pushWindow) private var pushWindow
     #endif
 
-    init(initialCard: StereoCard) {
-        self.initialCard = initialCard
-        _currentCardUUID = State(initialValue: initialCard.uuid)
+    init(initialRow: CardRow) {
+        self.initialRow = initialRow
+        _currentCardUUID = State(initialValue: initialRow.uuid)
     }
 
-    private var displayCards: [StereoCard] {
-        cards ?? [initialCard]
+    private var displayRows: [CardRow] {
+        rows ?? [initialRow]
     }
 
-    private var currentCard: StereoCard {
-        displayCards.first(where: { $0.uuid == currentCardUUID }) ?? initialCard
+    private var currentIndex: Int? {
+        currentCardUUID.flatMap { indexByUUID[$0] }
     }
-
-    #if os(visionOS)
-    private var stereoCards: [StereoCard] {
-        displayCards.filter(\.hasStereoDetections)
-    }
-    #endif
 
     var body: some View {
         cardContent
-        #if !os(visionOS)
-            .sheet(isPresented: $showWiggleStereo) {
-                NavigationStack {
-                    WiggleStereoView(
-                        card: currentCard,
-                        cropOverride: userDataService.cropOverride(for: currentCard.uuid)
-                    )
+            .navigationTitle("")
+            .toolbar {
+                if let currentCard {
+                    cardToolbar(for: currentCard)
                 }
             }
-        #endif
-        #if canImport(UIKit)
+            .onAppear {
+                snapshotContextIfNeeded()
+                resolveCurrentCard()
+                prefetchNeighbors()
+            }
+            .onChange(of: currentCardUUID) {
+                resolveCurrentCard()
+                prefetchNeighbors()
+            }
+            .onDisappear { prefetcher.stopPrefetching() }
+            #if os(visionOS)
+            .onChange(of: spatialPhotoViewModel.currentCardUUID) { _, newUUID in
+                guard spatialPhotoViewModel.isPresented,
+                      let newUUID,
+                      indexByUUID[newUUID] != nil else { return }
+                currentCardUUID = newUUID
+            }
+            #endif
+            #if !os(visionOS)
+            .sheet(isPresented: $showWiggleStereo) {
+                if let currentCard {
+                    NavigationStack {
+                        WiggleStereoView(
+                            card: currentCard,
+                            cropOverride: userDataService.cropOverride(for: currentCard.uuid)
+                        )
+                    }
+                }
+            }
+            #endif
+            #if canImport(UIKit)
             .sheet(isPresented: .init(
                 get: { shareItem != nil },
                 set: { if !$0 { shareItem = nil } }
@@ -75,7 +107,7 @@ struct CardPagerView: View {
                     ShareSheet(items: [url])
                 }
             }
-        #endif
+            #endif
             .alert("Share Error", isPresented: .init(
                 get: { shareError != nil },
                 set: { if !$0 { shareError = nil } }
@@ -90,11 +122,11 @@ struct CardPagerView: View {
 
     @ViewBuilder
     private var cardContent: some View {
-        if displayCards.count > 1 {
+        if displayRows.count > 1 {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
-                    ForEach(displayCards, id: \.uuid) { card in
-                        CardDetailView(card: card)
+                    ForEach(displayRows, id: \.uuid) { row in
+                        CardPage(uuid: row.uuid)
                             .containerRelativeFrame(.horizontal)
                     }
                 }
@@ -102,34 +134,8 @@ struct CardPagerView: View {
             }
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $currentCardUUID)
-            .navigationTitle("")
-            .toolbar { cardToolbar(for: currentCard) }
-            .onChange(of: currentCardUUID) {
-                isFavorite = userDataService.isFavorite(cardUUID: currentCard.uuid)
-                prefetchNeighbors()
-            }
-            .onAppear {
-                snapshotContextIfNeeded()
-                isFavorite = userDataService.isFavorite(cardUUID: currentCard.uuid)
-                prefetchNeighbors()
-            }
-            .onDisappear { prefetcher.stopPrefetching() }
-            #if os(visionOS)
-            .onChange(of: spatialPhotoViewModel.currentCardUUID) { _, newUUID in
-                guard spatialPhotoViewModel.isPresented,
-                      let newUUID,
-                      displayCards.contains(where: { $0.uuid == newUUID }) else { return }
-                currentCardUUID = newUUID
-            }
-            #endif
         } else {
-            CardDetailView(card: initialCard)
-                .navigationTitle("")
-                .toolbar { cardToolbar(for: initialCard) }
-                .onAppear {
-                    snapshotContextIfNeeded()
-                    isFavorite = userDataService.isFavorite(cardUUID: initialCard.uuid)
-                }
+            CardPage(uuid: initialRow.uuid)
         }
     }
 
@@ -164,7 +170,7 @@ struct CardPagerView: View {
         ToolbarItem(placement: .primaryAction) {
             Button {
                 spatialPhotoViewModel.present(
-                    cards: stereoCards,
+                    rows: displayRows.filter(\.hasStereoDetections),
                     initialCardUUID: card.uuid
                 )
                 pushWindow(id: "spatial-photo")
@@ -248,7 +254,7 @@ struct CardPagerView: View {
 
     /// Produces a filesystem-safe name without quotes, punctuation, or trailing
     /// periods so LaunchServices and the share system can resolve the URL.
-    private static func safeShareFilename(from title: String) -> String {
+    static func safeShareFilename(from title: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(.whitespaces).union(CharacterSet(charactersIn: "-_"))
         let stripped = title.unicodeScalars
             .map { allowed.contains($0) ? Character($0) : " " }
@@ -264,34 +270,66 @@ struct CardPagerView: View {
 
     // MARK: - Helpers
 
+    /// Resolves the on-screen page's model by indexed UUID fetch and refreshes
+    /// the favorite state. Cheap: one row by unique index.
+    private func resolveCurrentCard() {
+        guard let uuid = currentCardUUID else { return }
+        if currentCard?.uuid != uuid {
+            currentCard = modelContext.cards(matching: [uuid]).first
+        }
+        isFavorite = userDataService.isFavorite(cardUUID: uuid)
+    }
+
     /// Prefetches the full-resolution front (and back) images of the cards
-    /// immediately adjacent to the current one. Uses a bare URL request — the
-    /// same one `CardDetailView` renders via `LazyImage(url:)` — so the decoded
-    /// image lands under the matching memory-cache key and the swipe reuses it.
+    /// immediately adjacent to the current one. The front uses the same bare
+    /// URL request `CardDetailView` renders, so the decoded image lands under
+    /// the matching memory-cache key and the swipe reuses it.
     private func prefetchNeighbors() {
-        let cards = displayCards
-        guard cards.count > 1,
-              let index = cards.firstIndex(where: { $0.uuid == currentCardUUID }) else { return }
+        let rows = displayRows
+        guard rows.count > 1, let index = currentIndex else { return }
         let urls = [index - 1, index + 1]
-            .filter { cards.indices.contains($0) }
-            .flatMap { neighbor -> [URL] in
-                let card = cards[neighbor]
-                return [
-                    card.frontImageURL(quality: "q"),
-                    card.backImageURL(quality: "q")
-                ].compactMap { $0 }
-            }
+            .filter { rows.indices.contains($0) }
+            .compactMap { rows[$0].frontImageURL(quality: "q") }
         prefetcher.startPrefetching(with: urls)
     }
 
     private func snapshotContextIfNeeded() {
-        guard cards == nil else { return }
-        let contextCards = cardListContext.cards
-        if contextCards.contains(where: { $0.uuid == initialCard.uuid }) {
-            cards = contextCards
+        guard rows == nil else { return }
+        if cardListContext.index(of: initialRow.uuid) != nil {
+            rows = cardListContext.rows
+            indexByUUID = cardListContext.indexByUUID
         } else {
-            cards = [initialCard]
+            rows = [initialRow]
+            indexByUUID = [initialRow.uuid: 0]
         }
+    }
+}
+
+// MARK: - Card Page
+
+/// One page of the pager. Resolves its `StereoCard` by indexed UUID when it
+/// comes on screen, so off-screen pages never fault a model.
+private struct CardPage: View {
+    let uuid: String
+    @Environment(\.modelContext) private var modelContext
+    @State private var card: StereoCard?
+
+    var body: some View {
+        Group {
+            if let card {
+                CardDetailView(card: card)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear { resolve() }
+        .onChange(of: uuid) { resolve() }
+    }
+
+    private func resolve() {
+        guard card?.uuid != uuid else { return }
+        card = modelContext.cards(matching: [uuid]).first
     }
 }
 
@@ -349,9 +387,8 @@ import AppKit
 #if DEBUG
 #Preview(traits: .fixedLayout(width: 700, height: 800)) {
     NavigationStack {
-        CardPagerView(initialCard: PreviewSampleData.sampleCard)
+        CardPagerView(initialRow: CardRow(PreviewSampleData.sampleCard))
     }
     .previewEnvironment()
-    .environment(CardListContext())
 }
 #endif

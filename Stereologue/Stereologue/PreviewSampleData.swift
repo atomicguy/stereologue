@@ -147,6 +147,10 @@ enum PreviewSampleData {
         }
     }
 
+    static var sampleRows: [CardRow] {
+        sampleCards.map(CardRow.init)
+    }
+
     static var sampleCreator: Creator {
         firstSample(Creator.self)
     }

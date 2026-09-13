@@ -10,26 +10,20 @@ import SwiftData
 
 struct YearCardsView: View {
     let year: Int
-    @Query private var cards: [StereoCard]
-
-    init(year: Int) {
-        self.year = year
-        _cards = Query(
-            filter: #Predicate<StereoCard> { card in
-                card.yearStart == year
-            },
-            sort: \StereoCard.title
-        )
-    }
 
     var body: some View {
-        CardGridView(
-            cards: cards,
+        PagedCardGridView(
+            predicate: predicate,
             emptyTitle: "No Cards",
             emptySystemImage: "calendar",
             emptyDescription: "No cards from \(year)."
         )
         .navigationTitle(String(year))
+    }
+
+    private var predicate: Predicate<StereoCard> {
+        let year = year
+        return #Predicate<StereoCard> { $0.yearStart == year }
     }
 }
 

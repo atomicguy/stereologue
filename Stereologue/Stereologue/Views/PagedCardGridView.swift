@@ -2,81 +2,110 @@
 //  PagedCardGridView.swift
 //  Stereologue
 //
-//  A card grid backed by a *paged* catalog query instead of a pre-faulted
-//  relationship array. Opening a prolific creator/subject/place/collection
-//  otherwise faults every related card into memory on the main thread at once;
-//  this materializes one page at a time and grows as the user scrolls.
+//  A card grid backed by offset-paged `CardRow` fetches on the background
+//  `CatalogQueryService`. Pages are appended as the user scrolls; earlier
+//  pages are never refetched and no `@Model` instance is touched on the main
+//  thread while scrolling.
 //
 
 import SwiftUI
 import SwiftData
 
 struct PagedCardGridView: View {
-    let predicate: Predicate<StereoCard>
+    /// Cards to show, or `nil` for the whole catalog.
+    let predicate: Predicate<StereoCard>?
+    /// Must be a total order (end with a unique key such as `uuid`) so offset
+    /// paging never skips or repeats a card.
+    var sortBy: [SortDescriptor<StereoCard>] = PagedCardGridView.defaultSort
+    /// Change this whenever `predicate` changes (predicates aren't Equatable)
+    /// so the grid resets and reloads from the first page.
+    var queryKey: String = ""
     var emptyTitle: String = "No Cards"
     var emptySystemImage: String = "photo.on.rectangle.angled"
     var emptyDescription: String = "No cards to display."
 
-    /// Number of cards fetched per page. The first page appears immediately;
-    /// scrolling near the end grows the limit, which refetches the next page.
-    private static let pageSize = 60
+    nonisolated static let defaultSort: [SortDescriptor<StereoCard>] = [
+        SortDescriptor(\.title), SortDescriptor(\.uuid)
+    ]
 
-    @State private var limit = PagedCardGridView.pageSize
+    /// Cards fetched per page. Large enough that a wide window's first screen
+    /// is one round trip; small enough that the first page appears quickly.
+    private static let pageSize = 80
+
+    @Environment(\.catalogQueryService) private var queryService
+
+    @State private var rows: [CardRow] = []
+    /// The `queryKey` the current `rows` were loaded for. Guards against
+    /// reloading (and losing scroll position) when the grid merely reappears
+    /// after a navigation pop.
+    @State private var loadedKey: String?
+    @State private var reachedEnd = false
+    @State private var isLoadingPage = false
+    /// Bumped on every reset so a page that was in flight for an old query
+    /// is dropped when it lands.
+    @State private var generation = 0
 
     var body: some View {
-        PagedCardGrid(
-            predicate: predicate,
-            limit: limit,
-            emptyTitle: emptyTitle,
-            emptySystemImage: emptySystemImage,
-            emptyDescription: emptyDescription,
-            onReachEnd: { limit += Self.pageSize }
+        Group {
+            if loadedKey == nil {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                CardGridView(
+                    rows: rows,
+                    emptyTitle: emptyTitle,
+                    emptySystemImage: emptySystemImage,
+                    emptyDescription: emptyDescription,
+                    onReachEnd: reachedEnd ? nil : { loadNextPage() }
+                )
+            }
+        }
+        .task(id: queryKey) {
+            guard loadedKey != queryKey else { return }
+            await reload()
+        }
+    }
+
+    private func reload() async {
+        generation += 1
+        rows = []
+        reachedEnd = false
+        isLoadingPage = false
+        await loadPage(generation)
+    }
+
+    private func loadNextPage() {
+        guard !isLoadingPage, !reachedEnd else { return }
+        let current = generation
+        Task { await loadPage(current) }
+    }
+
+    private func loadPage(_ expectedGeneration: Int) async {
+        guard let queryService else {
+            loadedKey = queryKey
+            reachedEnd = true
+            return
+        }
+        isLoadingPage = true
+        let page = await queryService.cardRows(
+            matching: predicate,
+            sortBy: sortBy,
+            offset: rows.count,
+            limit: Self.pageSize
         )
+        guard expectedGeneration == generation else { return }
+        rows.append(contentsOf: page)
+        reachedEnd = page.count < Self.pageSize
+        loadedKey = queryKey
+        isLoadingPage = false
     }
 }
 
-/// Inner view whose `@Query` is rebuilt whenever `limit` changes. Bounded by
-/// `fetchLimit`, so only the visible pages are materialized on the main context.
-private struct PagedCardGrid: View {
-    @Query private var cards: [StereoCard]
-
-    private let limit: Int
-    private let emptyTitle: String
-    private let emptySystemImage: String
-    private let emptyDescription: String
-    private let onReachEnd: () -> Void
-
-    init(
-        predicate: Predicate<StereoCard>,
-        limit: Int,
-        emptyTitle: String,
-        emptySystemImage: String,
-        emptyDescription: String,
-        onReachEnd: @escaping () -> Void
-    ) {
-        var descriptor = FetchDescriptor<StereoCard>(
-            predicate: predicate,
-            sortBy: [SortDescriptor(\.title), SortDescriptor(\.uuid)]
-        )
-        descriptor.fetchLimit = limit
-        _cards = Query(descriptor)
-
-        self.limit = limit
-        self.emptyTitle = emptyTitle
-        self.emptySystemImage = emptySystemImage
-        self.emptyDescription = emptyDescription
-        self.onReachEnd = onReachEnd
+#if DEBUG
+#Preview(traits: .fixedLayout(width: 900, height: 700)) {
+    NavigationStack {
+        PagedCardGridView(predicate: nil)
     }
-
-    var body: some View {
-        CardGridView(
-            cards: cards,
-            emptyTitle: emptyTitle,
-            emptySystemImage: emptySystemImage,
-            emptyDescription: emptyDescription,
-            // Only ask for more when this page came back full — a short page
-            // means every matching card is already materialized.
-            onReachEnd: cards.count == limit ? onReachEnd : nil
-        )
-    }
+    .previewEnvironment()
 }
+#endif

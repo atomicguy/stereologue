@@ -155,6 +155,7 @@ struct StereologueApp: App {
         #if os(visionOS)
         WindowGroup(id: "spatial-photo") {
             SpatialPhotoView(spatialPhotoService: spatialPhotoService)
+                .modelContainer(catalogContainer)
                 .environment(spatialPhotoViewModel)
                 .environment(userDataService)
         }

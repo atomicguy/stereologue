@@ -114,8 +114,8 @@ extension View {
     /// Apply once at the NavigationStack root so links work at any depth.
     func cardNavigationDestinations() -> some View {
         self
-            .navigationDestination(for: StereoCard.self) { card in
-                CardPagerView(initialCard: card)
+            .navigationDestination(for: CardRow.self) { row in
+                CardPagerView(initialRow: row)
             }
             .navigationDestination(for: Subject.self) { subject in
                 SubjectCardsView(subject: subject)

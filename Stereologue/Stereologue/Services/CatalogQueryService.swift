@@ -45,6 +45,39 @@ actor CatalogQueryService {
         return byYear.keys.sorted().map { YearGroup(year: $0, count: byYear[$0]!.count) }
     }
 
+    /// Returns one page of grid rows for the cards matching `predicate`
+    /// (`nil` = whole catalog), in `sortBy` order, starting at `offset`.
+    ///
+    /// `sortBy` must be a total order (end it with `uuid`) so consecutive
+    /// pages neither skip nor repeat a card. The `@Model` instances are
+    /// materialized only in this actor's background context; callers get
+    /// plain values.
+    func cardRows(
+        matching predicate: Predicate<StereoCard>?,
+        sortBy: [SortDescriptor<StereoCard>],
+        offset: Int,
+        limit: Int
+    ) -> [CardRow] {
+        var descriptor = FetchDescriptor<StereoCard>(predicate: predicate, sortBy: sortBy)
+        descriptor.fetchOffset = offset
+        descriptor.fetchLimit = limit
+        let cards = (try? modelContext.fetch(descriptor)) ?? []
+        return cards.map(CardRow.init)
+    }
+
+    /// Returns rows for the given UUIDs, in the same order as `uuids`, so
+    /// caller-defined orderings (favorited-at, album sort) are respected.
+    /// The match is pushed into the store (`uuid` is indexed).
+    func cardRows(uuids: [String]) -> [CardRow] {
+        guard !uuids.isEmpty else { return [] }
+        let descriptor = FetchDescriptor<StereoCard>(
+            predicate: #Predicate { uuids.contains($0.uuid) }
+        )
+        let matched = (try? modelContext.fetch(descriptor)) ?? []
+        let byUUID = Dictionary(matched.map { ($0.uuid, CardRow($0)) }, uniquingKeysWith: { a, _ in a })
+        return uuids.compactMap { byUUID[$0] }
+    }
+
     /// Returns up to `limit` front-image URLs for cards matching `predicate`,
     /// running the fetch on this actor's background context.
     func previewImageURLs(

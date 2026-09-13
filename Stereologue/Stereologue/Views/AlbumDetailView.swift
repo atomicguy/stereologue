@@ -11,22 +11,31 @@ import SwiftData
 
 struct AlbumDetailView: View {
     let album: UserAlbum
-    @Environment(\.modelContext) private var catalogContext
+    @Environment(\.catalogQueryService) private var queryService
 
-    @State private var cards: [StereoCard] = []
+    @State private var rows: [CardRow] = []
+    @State private var hasLoaded = false
 
     var body: some View {
-        CardGridView(
-            cards: cards,
-            emptyTitle: "Empty Album",
-            emptySystemImage: "rectangle.stack",
-            emptyDescription: "Add cards to this album from the card detail view."
-        )
+        Group {
+            if hasLoaded {
+                CardGridView(
+                    rows: rows,
+                    emptyTitle: "Empty Album",
+                    emptySystemImage: "rectangle.stack",
+                    emptyDescription: "Add cards to this album from the card detail view."
+                )
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
         .navigationTitle(album.name)
         // Keyed on the album's card list, so the grid refetches when cards are
-        // added or removed rather than only on first appearance.
+        // added or removed. The catalog lookup runs off the main actor.
         .task(id: album.cardUUIDs) {
-            cards = catalogContext.cards(matching: album.cardUUIDs)
+            rows = await queryService?.cardRows(uuids: album.cardUUIDs) ?? []
+            hasLoaded = true
         }
     }
 }

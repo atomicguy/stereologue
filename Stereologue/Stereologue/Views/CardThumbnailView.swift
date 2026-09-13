@@ -10,10 +10,10 @@ import NukeUI
 import Nuke
 
 struct CardThumbnailView: View {
-    let card: StereoCard
+    let row: CardRow
 
     var body: some View {
-        if let url = card.frontImageURL(quality: "f") {
+        if let url = row.frontImageURL(quality: "f") {
             LazyImage(url: url) { state in
                 if let image = state.image {
                     image
@@ -52,7 +52,7 @@ struct CardThumbnailView: View {
 
 #if DEBUG
 #Preview(traits: .sizeThatFitsLayout) {
-    CardThumbnailView(card: PreviewSampleData.sampleCard)
+    CardThumbnailView(row: CardRow(PreviewSampleData.sampleCard))
         .padding()
         .previewEnvironment()
 }

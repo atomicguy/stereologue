@@ -85,12 +85,12 @@ private struct MosaicGrid: View {
 
 /// A standalone 2×2 mosaic for a fixed set of cards.
 struct MosaicThumbnailView: View {
-    let cards: [StereoCard]
+    let rows: [CardRow]
 
     private let mosaicSize: CGFloat = 80
 
     var body: some View {
-        MosaicGrid(imageURLs: cards.compactMap { $0.frontImageURL(quality: "t") })
+        MosaicGrid(imageURLs: rows.compactMap { $0.frontImageURL(quality: "t") })
             .frame(width: mosaicSize, height: mosaicSize)
             .clipShape(RoundedRectangle(cornerRadius: 8))
     }
@@ -248,7 +248,7 @@ struct BrowseMosaicGrid<Entity: Hashable>: View {
 
 #if DEBUG
 #Preview(traits: .sizeThatFitsLayout) {
-    MosaicThumbnailView(cards: PreviewSampleData.sampleCards)
+    MosaicThumbnailView(rows: PreviewSampleData.sampleRows)
         .padding()
         .previewEnvironment()
 }

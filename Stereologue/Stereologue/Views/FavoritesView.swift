@@ -10,23 +10,32 @@ import SwiftUI
 import SwiftData
 
 struct FavoritesView: View {
-    @Environment(\.modelContext) private var catalogContext
+    @Environment(\.catalogQueryService) private var queryService
     @Environment(UserDataService.self) private var userDataService
 
-    @State private var favoriteCards: [StereoCard] = []
+    @State private var rows: [CardRow] = []
+    @State private var hasLoaded = false
 
     var body: some View {
-        CardGridView(
-            cards: favoriteCards,
-            emptyTitle: "No Favorites",
-            emptySystemImage: "heart",
-            emptyDescription: "Cards you favorite will appear here."
-        )
+        Group {
+            if hasLoaded {
+                CardGridView(
+                    rows: rows,
+                    emptyTitle: "No Favorites",
+                    emptySystemImage: "heart",
+                    emptyDescription: "Cards you favorite will appear here."
+                )
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
         .navigationTitle("Favorites")
         // Keyed on the reactive favorite list, so the grid refetches whenever
-        // favorites change anywhere — fixing the stale-on-return `onAppear` bug.
+        // favorites change anywhere. The catalog lookup runs off the main actor.
         .task(id: userDataService.favoriteUUIDs) {
-            favoriteCards = catalogContext.cards(matching: userDataService.favoriteUUIDs)
+            rows = await queryService?.cardRows(uuids: userDataService.favoriteUUIDs) ?? []
+            hasLoaded = true
         }
     }
 }

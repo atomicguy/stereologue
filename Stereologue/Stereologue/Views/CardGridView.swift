@@ -2,20 +2,19 @@
 //  CardGridView.swift
 //  Stereologue
 //
-//  Reusable adaptive grid of stereoview cards with navigation links.
+//  Reusable adaptive grid of card rows with navigation links.
 //
 
 import SwiftUI
-import SwiftData
 import Nuke
 
 struct CardGridView: View {
-    let cards: [StereoCard]
+    let rows: [CardRow]
     let emptyTitle: String
     let emptySystemImage: String
     let emptyDescription: String
     /// Called as the user nears the end of the grid, so a paged caller can load
-    /// the next page. `nil` for fully-materialized grids (Library, Favorites…).
+    /// the next page. `nil` when every row is already present.
     let onReachEnd: (() -> Void)?
 
     @Environment(CardListContext.self) private var cardListContext
@@ -31,13 +30,13 @@ struct CardGridView: View {
     ]
 
     init(
-        cards: [StereoCard],
+        rows: [CardRow],
         emptyTitle: String = "No Cards",
         emptySystemImage: String = "photo.on.rectangle.angled",
         emptyDescription: String = "No cards to display.",
         onReachEnd: (() -> Void)? = nil
     ) {
-        self.cards = cards
+        self.rows = rows
         self.emptyTitle = emptyTitle
         self.emptySystemImage = emptySystemImage
         self.emptyDescription = emptyDescription
@@ -46,7 +45,7 @@ struct CardGridView: View {
 
     var body: some View {
         Group {
-            if cards.isEmpty {
+            if rows.isEmpty {
                 ContentUnavailableView(
                     emptyTitle,
                     systemImage: emptySystemImage,
@@ -55,10 +54,12 @@ struct CardGridView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(cards, id: \.uuid) { card in
-                            NavigationLink(value: card) {
-                                CardGridItemView(card: card)
-                                    .onAppear { onCardAppear(card) }
+                        // The index is passed in with the row so a cell's
+                        // appearance never has to search the array for itself.
+                        ForEach(Array(rows.enumerated()), id: \.element.uuid) { index, row in
+                            NavigationLink(value: row) {
+                                CardGridItemView(row: row)
+                                    .onAppear { onCardAppear(at: index) }
                             }
                             .buttonStyle(.plain)
                         }
@@ -67,24 +68,24 @@ struct CardGridView: View {
                 }
             }
         }
-        .onAppear { cardListContext.cards = cards }
-        .onChange(of: cards.count) { cardListContext.cards = cards }
+        .onAppear { cardListContext.update(rows) }
+        .onChange(of: rows) { cardListContext.update(rows) }
         .onDisappear { prefetcher.stopPrefetching() }
     }
 
-    private func onCardAppear(_ card: StereoCard) {
-        guard let index = cards.firstIndex(where: { $0.uuid == card.uuid }) else { return }
-
+    private func onCardAppear(at index: Int) {
         // Prefetch the next 10 cards ahead, using the same request the cell
         // renders so the cache key (URL + resize processor) matches and the
         // decode/resize work is reused on display.
-        let prefetchRange = (index + 1)..<min(index + 11, cards.count)
-        let requests = cards[prefetchRange].compactMap { CardGridItemView.thumbnailRequest(for: $0) }
-        prefetcher.startPrefetching(with: requests)
+        let prefetchRange = (index + 1)..<min(index + 11, rows.count)
+        if !prefetchRange.isEmpty {
+            let requests = rows[prefetchRange].compactMap { CardGridItemView.thumbnailRequest(for: $0) }
+            prefetcher.startPrefetching(with: requests)
+        }
 
         // Ask a paged caller to load the next page just before the end, so new
         // cards are ready by the time they scroll into view.
-        if let onReachEnd, index >= cards.count - 10 {
+        if let onReachEnd, index >= rows.count - 10 {
             onReachEnd()
         }
     }
@@ -93,7 +94,7 @@ struct CardGridView: View {
 #if DEBUG
 #Preview("With Cards", traits: .fixedLayout(width: 900, height: 700)) {
     NavigationStack {
-        CardGridView(cards: PreviewSampleData.sampleCards)
+        CardGridView(rows: PreviewSampleData.sampleRows)
     }
     .previewEnvironment()
 }
@@ -101,11 +102,12 @@ struct CardGridView: View {
 #Preview("Empty State", traits: .fixedLayout(width: 900, height: 700)) {
     NavigationStack {
         CardGridView(
-            cards: [],
+            rows: [],
             emptyTitle: "No Cards",
             emptySystemImage: "photo.on.rectangle.angled",
             emptyDescription: "No cards to display."
         )
     }
+    .previewEnvironment()
 }
 #endif

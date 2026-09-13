@@ -16,10 +16,10 @@ struct LibraryView: View {
         LibraryGrid(searchText: debouncedSearchText)
             .navigationTitle("Stereologue")
             .searchable(text: $searchText, prompt: "Cards, subjects, creators…")
-            // Debounce: rebuilding LibraryGrid's @Query runs a `localizedStandard-
-            // Contains` scan over the whole 41K-card catalog (title isn't indexed)
-            // on the main context. Rebuild only after typing pauses, not on every
-            // keystroke. Clearing the field applies immediately.
+            // Debounce: a search runs a `localizedStandardContains` scan over
+            // the whole 41K-card catalog (off the main actor, but still a full
+            // scan). Rebuild only after typing pauses, not on every keystroke.
+            // Clearing the field applies immediately.
             .task(id: searchText) {
                 if searchText.isEmpty {
                     debouncedSearchText = ""
@@ -32,30 +32,28 @@ struct LibraryView: View {
     }
 }
 
-/// Grid whose `@Query` is rebuilt from `searchText`, so filtering happens in
-/// the store rather than materializing the whole 41K-card catalog in memory.
+/// Paged grid over the whole catalog (or the title search), fetched in pages
+/// off the main actor so the 41K-card Library never materializes models on
+/// the main thread. `queryKey` resets the pages whenever the search changes.
 private struct LibraryGrid: View {
-    @Query private var cards: [StereoCard]
-    private let searchText: String
-
-    init(searchText: String) {
-        self.searchText = searchText
-        var descriptor = FetchDescriptor<StereoCard>()
-        if !searchText.isEmpty {
-            descriptor.predicate = #Predicate { $0.title.localizedStandardContains(searchText) }
-        }
-        _cards = Query(descriptor)
-    }
+    let searchText: String
 
     var body: some View {
-        CardGridView(
-            cards: cards,
+        PagedCardGridView(
+            predicate: predicate,
+            queryKey: searchText,
             emptyTitle: searchText.isEmpty ? "No Cards" : "No Results",
             emptySystemImage: searchText.isEmpty ? "photo.on.rectangle.angled" : "magnifyingglass",
             emptyDescription: searchText.isEmpty
                 ? "The catalog could not be loaded."
                 : "No cards match \"\(searchText)\"."
         )
+    }
+
+    private var predicate: Predicate<StereoCard>? {
+        guard !searchText.isEmpty else { return nil }
+        let text = searchText
+        return #Predicate { $0.title.localizedStandardContains(text) }
     }
 }
 

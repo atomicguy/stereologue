@@ -84,6 +84,7 @@ nonisolated final class StereoCard {
 
     #Index<StereoCard>(
         [\.uuid],
+        [\.title],
         [\.yearStart],
         [\.yearEnd],
         [\.division]
@@ -208,13 +209,17 @@ extension StereoCard {
     /// - `v` — .jpeg (2560 pixels on the long side)
     /// - `g` — .jpeg original dimensions
     func frontImageURL(quality: String = "w") -> URL? {
-        guard let id = frontImageID else { return nil }
-        return URL(string: "\(Self.iiifBase)?id=\(id)&t=\(quality)")
+        Self.iiifImageURL(id: frontImageID, quality: quality)
     }
 
     /// Returns the IIIF URL for the back of the card at the given quality.
     func backImageURL(quality: String = "w") -> URL? {
-        guard let id = backImageID else { return nil }
-        return URL(string: "\(Self.iiifBase)?id=\(id)&t=\(quality)")
+        Self.iiifImageURL(id: backImageID, quality: quality)
+    }
+
+    /// Builds the IIIF URL for any NYPL image ID at the given quality.
+    static func iiifImageURL(id: String?, quality: String) -> URL? {
+        guard let id else { return nil }
+        return URL(string: "\(iiifBase)?id=\(id)&t=\(quality)")
     }
 }

@@ -26,6 +26,7 @@ private let logger = Logger(
 struct SpatialPhotoView: View {
     @Environment(SpatialPhotoViewModel.self) private var viewModel
     @Environment(UserDataService.self) private var userDataService
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
     let spatialPhotoService: SpatialPhotoService
@@ -94,9 +95,12 @@ struct SpatialPhotoView: View {
     }
 
     /// Snapshot of the card plus any user crop override, built on MainActor.
-    private func cardData(for card: StereoCard) -> SpatialPhotoCardData {
-        card.spatialPhotoData(
-            cropOverride: userDataService.cropOverride(for: card.uuid)
+    /// Resolves the model by indexed UUID; only the cards actually rendered
+    /// (current and its neighbors) are ever materialized.
+    private func cardData(forUUID uuid: String) -> SpatialPhotoCardData? {
+        guard let card = modelContext.cards(matching: [uuid]).first else { return nil }
+        return card.spatialPhotoData(
+            cropOverride: userDataService.cropOverride(for: uuid)
         )
     }
 
@@ -214,8 +218,8 @@ struct SpatialPhotoView: View {
 
     private var titleOrnament: some View {
         Group {
-            if let card = viewModel.currentCard {
-                Text(card.title)
+            if let row = viewModel.currentRow {
+                Text(row.title)
                     .font(.title3)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
@@ -246,9 +250,9 @@ struct SpatialPhotoView: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 8) {
-                        ForEach(viewModel.cards, id: \.uuid) { card in
-                            thumbnailItem(card: card)
-                                .id(card.uuid)
+                        ForEach(viewModel.rows, id: \.uuid) { row in
+                            thumbnailItem(row: row)
+                                .id(row.uuid)
                         }
                     }
                     .padding(.horizontal, 8)
@@ -347,26 +351,26 @@ struct SpatialPhotoView: View {
 
     // MARK: - Thumbnail Item
 
-    private func thumbnailItem(card: StereoCard) -> some View {
+    private func thumbnailItem(row: CardRow) -> some View {
         Button {
-            guard card.uuid != viewModel.currentCardUUID else { return }
+            guard row.uuid != viewModel.currentCardUUID else { return }
             if let currentIdx = viewModel.currentIndex,
-               let targetIdx = viewModel.cards.firstIndex(where: { $0.uuid == card.uuid }) {
+               let targetIdx = viewModel.index(of: row.uuid) {
                 viewModel.navigationDirection = targetIdx > currentIdx
                     ? .forward : .backward
             }
             withAnimation(.easeInOut(duration: 0.35)) {
-                viewModel.currentCardUUID = card.uuid
+                viewModel.currentCardUUID = row.uuid
             }
         } label: {
-            CardThumbnailView(card: card)
+            CardThumbnailView(row: row)
                 .overlay {
-                    if card.uuid == viewModel.currentCardUUID {
+                    if row.uuid == viewModel.currentCardUUID {
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(.white, lineWidth: 2)
                     }
                 }
-                .opacity(card.uuid == viewModel.currentCardUUID ? 1.0 : 0.6)
+                .opacity(row.uuid == viewModel.currentCardUUID ? 1.0 : 0.6)
         }
         .buttonStyle(.plain)
         .hoverEffect(.highlight)
@@ -375,10 +379,10 @@ struct SpatialPhotoView: View {
     // MARK: - Loading
 
     private func loadSpatialPhoto() async {
-        guard let card = viewModel.currentCard,
-              card.hasStereoDetections else { return }
-        let cardData = cardData(for: card)
-        let cardUUID = card.uuid
+        guard let row = viewModel.currentRow,
+              row.hasStereoDetections,
+              let cardData = cardData(forUUID: row.uuid) else { return }
+        let cardUUID = row.uuid
 
         // Navigating away cancels any restoration still rendering for the
         // previous card.
@@ -410,10 +414,10 @@ struct SpatialPhotoView: View {
     /// in-progress render (if any) is cancelled first, so rapid menu changes
     /// don't pile up.
     private func applyStyle(_ style: RestorationStyle?) {
-        guard let card = viewModel.currentCard,
-              card.hasStereoDetections else { return }
-        let cardData = cardData(for: card)
-        let cardUUID = card.uuid
+        guard let row = viewModel.currentRow,
+              row.hasStereoDetections,
+              let cardData = cardData(forUUID: row.uuid) else { return }
+        let cardUUID = row.uuid
 
         restoreTask?.cancel()
         isRestoring = true
@@ -441,11 +445,10 @@ struct SpatialPhotoView: View {
     /// Warms the neighbors at the current style.
     private func prefetchAdjacent() {
         guard let idx = viewModel.currentIndex else { return }
-        var adjacent: [SpatialPhotoCardData] = []
-        if idx > 0 { adjacent.append(cardData(for: viewModel.cards[idx - 1])) }
-        if idx < viewModel.cards.count - 1 {
-            adjacent.append(cardData(for: viewModel.cards[idx + 1]))
-        }
+        let rows = viewModel.rows
+        let adjacent = [idx - 1, idx + 1]
+            .filter { rows.indices.contains($0) }
+            .compactMap { cardData(forUUID: rows[$0].uuid) }
         let style = currentStyle
         Task {
             await spatialPhotoService.prefetch(cards: adjacent, style: style)
@@ -459,9 +462,9 @@ struct SpatialPhotoView: View {
 @MainActor
 private func makePreviewViewModel() -> SpatialPhotoViewModel {
     let vm = SpatialPhotoViewModel()
-    let cards = PreviewSampleData.sampleCards
-    if let first = cards.first {
-        vm.present(cards: cards, initialCardUUID: first.uuid)
+    let rows = PreviewSampleData.sampleRows
+    if let first = rows.first {
+        vm.present(rows: rows, initialCardUUID: first.uuid)
     }
     return vm
 }

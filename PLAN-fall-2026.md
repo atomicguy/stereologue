@@ -62,7 +62,14 @@ crop edit is reflected in the spatial viewer on next open.
 
 ---
 
-## Phase 2 — Smooth scrolling (2–3 days)
+## Phase 2 — Smooth scrolling (2–3 days) — ✅ implemented
+
+Status: shipped on `fall-2026-revision`. Every card grid now scrolls over
+`CardRow` values fetched in offset pages of 80 by `CatalogQueryService`; a
+`#Index` on `title` was added so title-ordered pages deep into the catalog
+are cheap (verified against the bundled store in `StereologueTests`, which
+also exercises the lightweight migration users' installed stores will run).
+Remaining: item 6, the Instruments numbers on iPad Pro and Vision Pro.
 
 Goal: the Library grid (41K cards) and every other card grid scroll at frame
 rate on iPad and Vision Pro, with no main-thread SwiftData faulting during
