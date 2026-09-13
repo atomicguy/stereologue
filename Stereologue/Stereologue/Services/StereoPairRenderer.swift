@@ -77,6 +77,27 @@ extension StereoCard {
     }
 }
 
+/// How much of the source resolution a render keeps.
+///
+/// Everything a viewer shows by default — and everything prefetch warms — is
+/// `preview`. `full` is for an explicit user request (and sharing), and is
+/// where any future defect-repair pass will run.
+nonisolated enum RenderTier: String, Sendable, CaseIterable {
+    /// Each eye downscaled so its width is at most `previewMaxWidth` pixels.
+    case preview
+    /// Source resolution.
+    case full
+
+    static let previewMaxWidth = 1024
+
+    var displayName: String {
+        switch self {
+        case .preview: "Preview"
+        case .full: "Full Resolution"
+        }
+    }
+}
+
 /// Metadata to embed in spatial HEIC files for sharing.
 nonisolated struct SpatialPhotoMetadata: Sendable {
     var title: String?
@@ -180,10 +201,11 @@ nonisolated struct StereoPairRenderer: Sendable {
         for card: SpatialPhotoCardData,
         quality: String,
         style: RestorationStyle?,
+        tier: RenderTier,
         metadata: SpatialPhotoMetadata? = nil
     ) async throws -> Data {
         let (left, right) = try await preparedStereoPair(
-            for: card, quality: quality, style: style
+            for: card, quality: quality, style: style, tier: tier
         )
         try Task.checkCancellation()
         return try makeSpatialHEICData(
@@ -198,7 +220,8 @@ nonisolated struct StereoPairRenderer: Sendable {
     func preparedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String,
-        style: RestorationStyle? = nil
+        style: RestorationStyle? = nil,
+        tier: RenderTier = .preview
     ) async throws -> (left: CGImage, right: CGImage) {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
@@ -211,7 +234,7 @@ nonisolated struct StereoPairRenderer: Sendable {
         let leftDetection = card.leftDetection
         let rightDetection = card.rightDetection
 
-        logger.info("Preparing stereo pair for \(card.uuid)")
+        logger.info("Preparing stereo pair for \(card.uuid) (\(style?.rawValue ?? "original"), \(tier.rawValue))")
 
         // 1. Download source image via Nuke (benefits from its disk cache).
         //    Nuke's async API cancels the download with the task.
@@ -247,6 +270,19 @@ nonisolated struct StereoPairRenderer: Sendable {
             sourceImage, detection: rightDetection, label: "right",
             scaleX: scaleX, scaleY: scaleY
         )
+
+        // 2b. Preview tier: downscale both eyes by one shared factor (so
+        // parallax geometry stays identical between them) before any pixel
+        // work, which is what bounds the cost of every later stage.
+        if tier == .preview {
+            let widest = Double(max(leftCGImage.width, rightCGImage.width))
+            let factor = min(1.0, Double(RenderTier.previewMaxWidth) / widest)
+            if factor < 1 {
+                leftCGImage = downscaled(leftCGImage, by: factor) ?? leftCGImage
+                rightCGImage = downscaled(rightCGImage, by: factor) ?? rightCGImage
+            }
+        }
+        try Task.checkCancellation()
 
         // 3. Optionally restore tone and contrast. The two eyes are
         // independent, so restore them concurrently.
@@ -329,6 +365,22 @@ nonisolated struct StereoPairRenderer: Sendable {
             "Cropped \(label) image: \(cropped.width)x\(cropped.height)"
         )
         return cropped
+    }
+
+    /// Resamples an image by `factor` (< 1) with high-quality interpolation.
+    private func downscaled(_ image: CGImage, by factor: Double) -> CGImage? {
+        let width = max(1, Int((Double(image.width) * factor).rounded()))
+        let height = max(1, Int((Double(image.height) * factor).rounded()))
+        guard let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     /// Ensures left and right images have identical pixel dimensions

@@ -35,6 +35,10 @@ struct SpatialPhotoView: View {
     @State private var isLoading = false
     @State private var isRestoring = false
     @State private var currentStyle: RestorationStyle?
+    /// Render at source resolution instead of the preview cap. Explicit
+    /// user request only; prefetch always warms the preview tier.
+    @State private var fullResolution = false
+    private var tier: RenderTier { fullResolution ? .full : .preview }
     @State private var displayedCardUUID: String?
     @State private var useFadeTransition = false
     @State private var isFavorite = false
@@ -48,7 +52,7 @@ struct SpatialPhotoView: View {
                 // Spatial photo with push transition
                 if let spatialPhotoData {
                     spatialPhotoContent(data: spatialPhotoData, geometry: geometry)
-                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")")
+                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")_\(tier.rawValue)")
                         .transition(photoTransition)
                 } else if isLoading {
                     ProgressView()
@@ -316,13 +320,22 @@ struct SpatialPhotoView: View {
                     Picker("Restoration", selection: Binding(
                         get: { currentStyle },
                         set: { newStyle in
-                            applyStyle(newStyle)
+                            applyRender(style: newStyle, fullResolution: fullResolution)
                         }
                     )) {
                         Text("Original").tag(RestorationStyle?.none)
                         ForEach(RestorationStyle.allCases) { style in
                             Text(style.displayName).tag(RestorationStyle?.some(style))
                         }
+                    }
+
+                    Divider()
+
+                    Toggle(isOn: Binding(
+                        get: { fullResolution },
+                        set: { applyRender(style: currentStyle, fullResolution: $0) }
+                    )) {
+                        Label("Full Resolution", systemImage: "arrow.up.left.and.arrow.down.right")
                     }
                 } label: {
                     Image(systemName: currentStyle != nil ? "wand.and.stars" : "wand.and.stars.inverse")
@@ -393,7 +406,7 @@ struct SpatialPhotoView: View {
 
         do {
             let data = try await spatialPhotoService.spatialHEICData(
-                for: cardData, style: currentStyle
+                for: cardData, style: currentStyle, tier: tier
             )
             withAnimation(.easeInOut(duration: 0.35)) {
                 spatialPhotoData = data
@@ -410,10 +423,10 @@ struct SpatialPhotoView: View {
         isLoading = false
     }
 
-    /// Renders the current card with the requested style. The previous
-    /// in-progress render (if any) is cancelled first, so rapid menu changes
-    /// don't pile up.
-    private func applyStyle(_ style: RestorationStyle?) {
+    /// Renders the current card with the requested style and tier. The
+    /// previous in-progress render (if any) is cancelled first, so rapid menu
+    /// changes don't pile up.
+    private func applyRender(style: RestorationStyle?, fullResolution: Bool) {
         guard let row = viewModel.currentRow,
               row.hasStereoDetections,
               let cardData = cardData(forUUID: row.uuid) else { return }
@@ -425,13 +438,14 @@ struct SpatialPhotoView: View {
             defer { isRestoring = false }
             do {
                 let data = try await spatialPhotoService.spatialHEICData(
-                    for: cardData, style: style
+                    for: cardData, style: style, tier: fullResolution ? .full : .preview
                 )
                 useFadeTransition = true
                 withAnimation(.easeInOut(duration: 0.35)) {
                     spatialPhotoData = data
                     displayedCardUUID = cardUUID
                     currentStyle = style
+                    self.fullResolution = fullResolution
                 }
             } catch is CancellationError {
                 // User cancelled or changed their mind; keep what's showing.

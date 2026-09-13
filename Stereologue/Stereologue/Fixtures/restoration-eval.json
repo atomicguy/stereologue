@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "generated": "2026-09-13",
+  "method": "Stratified by measured per-eye statistics on the 760px rendition of deterministic samples of the bundled catalog (cards with both stereo detections; every 170th row, plus two further passes of the same stride for the 'blown' category, 725 cards in all). Categories are the top five by each score; 'clean' is the five closest to a well-exposed, low-defect, evenly lit print. No scanned card has digitally clipped pixels, so 'blown' ranks by the fraction of pixels at or above 0.85 luminance. Auto-selected: confirm visually before treating any card as ground truth for its category.",
+  "cards": [
+    {
+      "uuid": "35644b00-c55a-012f-95f3-58d385a7bc34",
+      "frontImageID": "G91F220_160F",
+      "title": "Central Park, Bow Bridge.",
+      "category": "clean",
+      "note": "mean 0.52, std 0.168, clip 0.0%, specks 0.01%"
+    },
+    {
+      "uuid": "3c8cc650-c549-012f-8a47-58d385a7bc34",
+      "frontImageID": "G90F419_058F",
+      "title": "Minne-ha-ha.",
+      "category": "clean",
+      "note": "mean 0.43, std 0.163, clip 0.0%, specks 0.05%"
+    },
+    {
+      "uuid": "402749d0-c574-012f-39e0-58d385a7bc34",
+      "frontImageID": "G92F147_005F",
+      "title": "View of breast-works on Round Top, Gettysburg.",
+      "category": "clean",
+      "note": "mean 0.53, std 0.111, clip 0.0%, specks 0.00%"
+    },
+    {
+      "uuid": "70be4d50-c535-012f-b728-58d385a7bc34",
+      "frontImageID": "G90F045_023ZF",
+      "title": "North Cheyenne Canyon. Mystic Fall.",
+      "category": "clean",
+      "note": "mean 0.54, std 0.204, clip 0.0%, specks 0.01%"
+    },
+    {
+      "uuid": "d002a300-c52e-012f-84c9-58d385a7bc34",
+      "frontImageID": "G92F129_024F",
+      "title": "Giant Tex Ox Team dragging the huge logs to the Mill, Boulder Creek, Logging Camp, California.",
+      "category": "clean",
+      "note": "mean 0.47, std 0.113, clip 0.0%, specks 0.01%"
+    },
+    {
+      "uuid": "4f64de50-c56e-012f-4b75-58d385a7bc34",
+      "frontImageID": "G92F080_014F",
+      "title": "A live badger captured near Lind, Wash.",
+      "category": "defects",
+      "note": "impulse-pixel fraction L 0.37% R 0.37%"
+    },
+    {
+      "uuid": "6f727ac0-c548-012f-dec1-58d385a7bc34",
+      "frontImageID": "G90F383_027F",
+      "title": "Experts testing engines in an automoblie plant.",
+      "category": "defects",
+      "note": "impulse-pixel fraction L 0.28% R 0.36%"
+    },
+    {
+      "uuid": "8dce3340-c566-012f-2b91-58d385a7bc34",
+      "frontImageID": "G91F341_004F",
+      "title": "Johnstown flood, general wreck.",
+      "category": "defects",
+      "note": "impulse-pixel fraction L 0.29% R 0.34%"
+    },
+    {
+      "uuid": "eaf7b360-c546-012f-b27d-58d385a7bc34",
+      "frontImageID": "G90F274_036F",
+      "title": "Swasey's garden.",
+      "category": "defects",
+      "note": "impulse-pixel fraction L 0.23% R 0.31%"
+    },
+    {
+      "uuid": "fbd8acf0-c53c-012f-9f2c-58d385a7bc34",
+      "frontImageID": "G90F206_016F",
+      "title": "Cutting the cane on a sugar plantation, near New Orleans, Louisiana, U.S.A.",
+      "category": "defects",
+      "note": "impulse-pixel fraction L 4.52% R 4.68%"
+    },
+    {
+      "uuid": "07e9afb0-c546-012f-748c-58d385a7bc34",
+      "frontImageID": "G90F259_076F",
+      "title": "Mattakesset Lodge.",
+      "category": "blown",
+      "note": "bright (\u22650.85 luminance) L 34.4% R 27.7%"
+    },
+    {
+      "uuid": "72a48410-c54c-012f-71d4-58d385a7bc34",
+      "frontImageID": "G91F007_030ZF",
+      "title": "Fabyan House.",
+      "category": "blown",
+      "note": "bright (\u22650.85 luminance) L 29.6% R 34.7%"
+    },
+    {
+      "uuid": "85eb7c40-c540-012f-7746-58d385a7bc34",
+      "frontImageID": "G90F225_031F",
+      "title": "Barrett Gymnasium, Amherst College.",
+      "category": "blown",
+      "note": "bright (\u22650.85 luminance) L 35.5% R 30.9%"
+    },
+    {
+      "uuid": "961498c0-c543-012f-28fe-58d385a7bc34",
+      "frontImageID": "G90F315_014F",
+      "title": "Bunker Hill Monument.",
+      "category": "blown",
+      "note": "bright (\u22650.85 luminance) L 74.3% R 47.2%"
+    },
+    {
+      "uuid": "b09ce1b0-c545-012f-a523-58d385a7bc34",
+      "frontImageID": "G90F257_017F",
+      "title": "From the top of the Cliff.",
+      "category": "blown",
+      "note": "bright (\u22650.85 luminance) L 37.5% R 35.0%"
+    },
+    {
+      "uuid": "5f551230-c551-012f-a8ed-58d385a7bc34",
+      "frontImageID": "G91F094_162ZF",
+      "title": "View of Cottage from Dock.",
+      "category": "dark",
+      "note": "mean luminance 0.31"
+    },
+    {
+      "uuid": "6ba8fe20-c530-012f-8f12-58d385a7bc34",
+      "frontImageID": "G89F331_011F",
+      "title": "Thurlow Lodge, res. of M.S. Latham, Menlo Park.",
+      "category": "dark",
+      "note": "mean luminance 0.25"
+    },
+    {
+      "uuid": "823d5e30-c551-012f-a789-58d385a7bc34",
+      "frontImageID": "G91F085_011F",
+      "title": "Main Street, Greenwich, N.Y.",
+      "category": "dark",
+      "note": "mean luminance 0.31"
+    },
+    {
+      "uuid": "9197b4f0-c553-012f-2a8d-58d385a7bc34",
+      "frontImageID": "G91F101_035ZF",
+      "title": "Ausable Chasm. The bridge at Hyde's Cave.",
+      "category": "dark",
+      "note": "mean luminance 0.24"
+    },
+    {
+      "uuid": "c5211750-c52f-012f-69b1-58d385a7bc34",
+      "frontImageID": "G89F325_001F",
+      "title": "Big Tree Hercules, Calaveras Grove, Cal.",
+      "category": "dark",
+      "note": "mean luminance 0.25"
+    },
+    {
+      "uuid": "91e701d0-c560-012f-bcad-58d385a7bc34",
+      "frontImageID": "G91F143_042F",
+      "title": "The Jewel of Saratoga.",
+      "category": "faded",
+      "note": "luminance std 0.058, mean 0.57"
+    },
+    {
+      "uuid": "a9a05ba0-c53c-012f-3cd5-58d385a7bc34",
+      "frontImageID": "G90F195_026ZF",
+      "title": "Street view of Salina, including drug store.",
+      "category": "faded",
+      "note": "luminance std 0.059, mean 0.71"
+    },
+    {
+      "uuid": "bfe0e250-c569-012f-97a3-58d385a7bc34",
+      "frontImageID": "G91F375_151F",
+      "title": "Wire bridge at Fairmount (Instantenous).",
+      "category": "faded",
+      "note": "luminance std 0.056, mean 0.72"
+    },
+    {
+      "uuid": "cdb37d30-c545-012f-ca17-58d385a7bc34",
+      "frontImageID": "G90F258_048F",
+      "title": "View of cottages.",
+      "category": "faded",
+      "note": "luminance std 0.048, mean 0.70"
+    },
+    {
+      "uuid": "e2cbf5c0-c54a-012f-c6fe-58d385a7bc34",
+      "frontImageID": "G91F010_026F",
+      "title": "Bright, Bright as Day.'",
+      "category": "faded",
+      "note": "luminance std 0.050, mean 0.56"
+    },
+    {
+      "uuid": "1fc29ce0-c56e-012f-0edc-58d385a7bc34",
+      "frontImageID": "G92F079_038F",
+      "title": "St. John's Church.",
+      "category": "uneven",
+      "note": "illumination gradient 0.43"
+    },
+    {
+      "uuid": "3b1e2960-c555-012f-218d-58d385a7bc34",
+      "frontImageID": "G91F123_021F",
+      "title": "Lake from Eagle Cliff.",
+      "category": "uneven",
+      "note": "illumination gradient 0.49"
+    },
+    {
+      "uuid": "aa2a8010-c53a-012f-4b62-58d385a7bc34",
+      "frontImageID": "G90F163_016ZF",
+      "title": "Looking north from Winnebago County at Rockford, Ill.",
+      "category": "uneven",
+      "note": "illumination gradient 0.43"
+    },
+    {
+      "uuid": "bc637290-c54f-012f-e339-58d385a7bc34",
+      "frontImageID": "G90F468_046F",
+      "title": "Meadows and ledges, from Sunset Bank, North Conway, N.H.",
+      "category": "uneven",
+      "note": "illumination gradient 0.58"
+    },
+    {
+      "uuid": "e5449770-c570-012f-af7f-58d385a7bc34",
+      "frontImageID": "G90F120_012F",
+      "title": "Penn. Avenue, Washington, D.C..",
+      "category": "uneven",
+      "note": "illumination gradient 0.50"
+    },
+    {
+      "uuid": "2a0577d0-c52f-012f-28ae-58d385a7bc34",
+      "frontImageID": "G89F319_010F",
+      "title": "Primitive mining, the old rocker. C.E. Watkins posing as miner.",
+      "category": "mismatch",
+      "note": "eye mean difference 0.077 (L 0.51 R 0.58)"
+    },
+    {
+      "uuid": "31010f20-c548-012f-619e-58d385a7bc34",
+      "frontImageID": "G90F397_028F",
+      "title": "Chrystal grotto.",
+      "category": "mismatch",
+      "note": "eye mean difference 0.093 (L 0.50 R 0.40)"
+    },
+    {
+      "uuid": "aedccec0-c52f-012f-38b9-58d385a7bc34",
+      "frontImageID": "G89F323_050F",
+      "title": "The Three Graces seen through the Bryant & Seward, Mammoth Grove, Calaveras Co., Cal.",
+      "category": "mismatch",
+      "note": "eye mean difference 0.087 (L 0.34 R 0.43)"
+    },
+    {
+      "uuid": "ce62d2d0-c55c-012f-7d53-58d385a7bc34",
+      "frontImageID": "G91F069_095F",
+      "title": "Niagara in winter, Crystal Cave below Table Rock.",
+      "category": "mismatch",
+      "note": "eye mean difference 0.121 (L 0.60 R 0.48)"
+    },
+    {
+      "uuid": "e55fead0-c548-012f-3dd9-58d385a7bc34",
+      "frontImageID": "G90F417_013F",
+      "title": "Block on Main Street.",
+      "category": "mismatch",
+      "note": "eye mean difference 0.092 (L 0.41 R 0.50)"
+    },
+    {
+      "uuid": "02e6f9d0-c570-012f-c1af-58d385a7bc34",
+      "frontImageID": "G90F103_018F",
+      "title": "Looking North, from the Dome of the Capitol, Washington, D.C.",
+      "category": "sepia",
+      "note": "chroma 0.38, hue spread 1.4\u00b0"
+    },
+    {
+      "uuid": "402a2a60-c573-012f-7a15-58d385a7bc34",
+      "frontImageID": "G92F101_006F",
+      "title": "Poyntz Avenue, Manhattan, Kansas, 402 miles west of St. Louis, Mo.",
+      "category": "sepia",
+      "note": "chroma 0.37, hue spread 1.6\u00b0"
+    },
+    {
+      "uuid": "5fba4470-c543-012f-582a-58d385a7bc34",
+      "frontImageID": "G90F311_018ZF",
+      "title": "Boston water works, Sudbury River Conduit, 1876, Dam no. III, north end of Dam, looking south towards Hauer's(?).",
+      "category": "sepia",
+      "note": "chroma 0.39, hue spread 1.8\u00b0"
+    },
+    {
+      "uuid": "653cfc90-c565-012f-9724-58d385a7bc34",
+      "frontImageID": "G91F309_078F",
+      "title": "Horse Shoe Curve.",
+      "category": "sepia",
+      "note": "chroma 0.37, hue spread 1.6\u00b0"
+    },
+    {
+      "uuid": "bab6f880-c538-012f-e0a4-58d385a7bc34",
+      "frontImageID": "G90F141_016F",
+      "title": "Grand dining hall, Ponce de Leon Hotel, St. Augustine, Florida.",
+      "category": "sepia",
+      "note": "chroma 0.40, hue spread 1.5\u00b0"
+    },
+    {
+      "uuid": "0f42ff40-c53e-012f-e61e-58d385a7bc34",
+      "frontImageID": "G89F153_003F",
+      "title": "On the Saco, Buxton, Me.",
+      "category": "tinted",
+      "note": "chroma 0.34, hue spread 19.1\u00b0"
+    },
+    {
+      "uuid": "6737db10-c52e-012f-3152-58d385a7bc34",
+      "frontImageID": "G89F308_010F",
+      "title": "Juneau City, from across Gastinean Channel, Alaska",
+      "category": "tinted",
+      "note": "chroma 0.14, hue spread 64.9\u00b0"
+    },
+    {
+      "uuid": "a18f4470-c52e-012f-ba4f-58d385a7bc34",
+      "frontImageID": "G88F122_009F",
+      "title": "View of the Grand Canon [Ca\u00f1on] of the Colorado, Arizona",
+      "category": "tinted",
+      "note": "chroma 0.28, hue spread 26.0\u00b0"
+    },
+    {
+      "uuid": "b5793250-c541-012f-d96e-58d385a7bc34",
+      "frontImageID": "G90F328_008F",
+      "title": "Beacon Street, Boston.",
+      "category": "tinted",
+      "note": "chroma 0.26, hue spread 14.9\u00b0"
+    },
+    {
+      "uuid": "f6d51060-c55d-012f-1acb-58d385a7bc34",
+      "frontImageID": "G90F395_077F",
+      "title": "Horseshoe Fall, Canada side.",
+      "category": "tinted",
+      "note": "chroma 0.11, hue spread 31.4\u00b0"
+    }
+  ]
+}

@@ -8,6 +8,8 @@
 import Testing
 import Foundation
 import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import SwiftData
 @testable import Stereologue
 
@@ -60,10 +62,11 @@ struct StereologueTests {
             rightDetection: ImageDetection(x: 500, y: 200, width: 300, height: 400),
             imageWidth: 1000, imageHeight: 500
         )
-        let original = SpatialPhotoService.variantKey(for: base, quality: "v", style: nil)
-        let styled = SpatialPhotoService.variantKey(for: base, quality: "v", style: .enhance)
-        let otherStyle = SpatialPhotoService.variantKey(for: base, quality: "v", style: .preserveTone)
-        let lowRes = SpatialPhotoService.variantKey(for: base, quality: "w", style: nil)
+        let original = SpatialPhotoService.variantKey(for: base, quality: "v", style: nil, tier: .preview)
+        let styled = SpatialPhotoService.variantKey(for: base, quality: "v", style: .enhance, tier: .preview)
+        let otherStyle = SpatialPhotoService.variantKey(for: base, quality: "v", style: .preserveTone, tier: .preview)
+        let fullTier = SpatialPhotoService.variantKey(for: base, quality: "v", style: nil, tier: .full)
+        let lowRes = SpatialPhotoService.variantKey(for: base, quality: "w", style: nil, tier: .preview)
 
         // A user crop edit must never hit the old crop's cache entry.
         let recropped = SpatialPhotoCardData(
@@ -72,10 +75,10 @@ struct StereologueTests {
             rightDetection: base.rightDetection,
             imageWidth: base.imageWidth, imageHeight: base.imageHeight
         )
-        let recroppedKey = SpatialPhotoService.variantKey(for: recropped, quality: "v", style: nil)
+        let recroppedKey = SpatialPhotoService.variantKey(for: recropped, quality: "v", style: nil, tier: .preview)
 
-        #expect(Set([original, styled, otherStyle, lowRes, recroppedKey]).count == 5)
-        #expect(original == SpatialPhotoService.variantKey(for: base, quality: "v", style: nil))
+        #expect(Set([original, styled, otherStyle, fullTier, lowRes, recroppedKey]).count == 6)
+        #expect(original == SpatialPhotoService.variantKey(for: base, quality: "v", style: nil, tier: .preview))
         #expect(original.hasPrefix("abc_"), "evict(cardUUID:) relies on the uuid prefix")
     }
 
@@ -143,6 +146,128 @@ struct StereologueTests {
 
         #expect(rows.count == 40)
         #expect(rows.allSatisfy { $0.title.localizedStandardContains(text) })
+    }
+
+    // MARK: - Restoration evaluation set
+
+    /// The fixture must load from the app bundle, cover every category, and
+    /// name only cards that exist in the bundled catalog with both stereo
+    /// detections — otherwise the eval tool and golden tests judge nothing.
+    @Test func restorationEvalSetIsConsistentWithCatalog() async throws {
+        let evalSet = try RestorationEvalSet.load()
+        #expect(evalSet.cards.count >= 36)
+        let categories = Set(evalSet.cards.map(\.category))
+        #expect(categories == Set(RestorationEvalSet.categories))
+        #expect(Set(evalSet.cards.map(\.uuid)).count == evalSet.cards.count, "duplicate uuids")
+
+        let container = try Self.makeBundledCatalogContainer()
+        let service = CatalogQueryService(modelContainer: container)
+        let rows = await service.cardRows(uuids: evalSet.cards.map(\.uuid))
+        #expect(rows.count == evalSet.cards.count, "every eval card must exist in the catalog")
+        #expect(rows.allSatisfy { $0.hasStereoDetections })
+    }
+
+    // MARK: - Golden renders
+
+    /// `StereologueTests/Fixtures/`: `eval-<category>-<uuid>-L.jpg` inputs
+    /// (512 px left-eye crops of evaluation-set cards) and their
+    /// `golden-…-<style>.jpg` renders. JPEG (quality 92) keeps the fixtures
+    /// near a megabyte; its error is far below the 2 % tolerance.
+    private static var fixturesDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures", isDirectory: true)
+    }
+
+    /// Every tone style, on every committed eye crop, must stay within 2 %
+    /// mean absolute pixel difference of its committed golden render.
+    ///
+    /// To re-record after an intentional change, run the suite with
+    /// `TEST_RUNNER_STEREOLOGUE_RECORD_GOLDENS=1`. The sandboxed test host
+    /// can't write into the source tree, so the new goldens land in
+    /// `RecordedGoldens/` under the host's temporary directory (the path is
+    /// printed); copy them into `Fixtures/` and review them in the
+    /// Restoration Eval tool before committing.
+    @Test(arguments: RestorationStyle.allCases)
+    func toneStylesMatchGoldenRenders(style: RestorationStyle) throws {
+        let dir = Self.fixturesDirectory
+        let sources = try FileManager.default
+            .contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("eval-") && $0.pathExtension == "jpg" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        #expect(sources.count >= 4, "no eval-*.jpg fixtures in \(dir.path)")
+
+        let record = ProcessInfo.processInfo.environment["STEREOLOGUE_RECORD_GOLDENS"] == "1"
+        let recordDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RecordedGoldens", isDirectory: true)
+        if record {
+            try FileManager.default.createDirectory(at: recordDir, withIntermediateDirectories: true)
+            print("STEREOLOGUE_RECORD_GOLDENS: writing to \(recordDir.path)")
+        }
+        let pipeline = RestorationPipeline()
+
+        for source in sources {
+            let input = try #require(Self.loadImage(source))
+            let output = pipeline.restore(input, style: style)
+            #expect(output.width == input.width && output.height == input.height)
+
+            let goldenName = source.deletingPathExtension().lastPathComponent
+                .replacingOccurrences(of: "eval-", with: "golden-") + "-\(style.rawValue).jpg"
+            let goldenURL = dir.appendingPathComponent(goldenName)
+            if record {
+                try Self.writeJPEG(output, to: recordDir.appendingPathComponent(goldenName))
+                continue
+            }
+            let golden = try #require(
+                Self.loadImage(goldenURL),
+                "missing \(goldenName); record with STEREOLOGUE_RECORD_GOLDENS=1"
+            )
+            let difference = try #require(Self.meanAbsoluteDifference(output, golden))
+            #expect(difference < 0.02, "\(goldenName) drifted by \(difference * 100)% mean pixel difference")
+        }
+    }
+
+    private static func loadImage(_ url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    private static func writeJPEG(_ image: CGImage, to url: URL) throws {
+        guard let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { throw CocoaError(.fileWriteUnknown) }
+        let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.92]
+        CGImageDestinationAddImage(destination, image, options as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+    }
+
+    private static func rgba(_ image: CGImage) -> [UInt8]? {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: &pixels, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixels
+    }
+
+    /// Mean |a − b| over RGB, normalized to 0…1. `nil` on a size mismatch.
+    private static func meanAbsoluteDifference(_ a: CGImage, _ b: CGImage) -> Double? {
+        guard a.width == b.width, a.height == b.height,
+              let pa = rgba(a), let pb = rgba(b) else { return nil }
+        var total = 0
+        var i = 0
+        while i < pa.count {
+            total += abs(Int(pa[i]) - Int(pb[i]))
+                + abs(Int(pa[i + 1]) - Int(pb[i + 1]))
+                + abs(Int(pa[i + 2]) - Int(pb[i + 2]))
+            i += 4
+        }
+        return Double(total) / Double(pa.count / 4 * 3) / 255
     }
 
     @Test func parseYearReadsLeadingFourDigits() {

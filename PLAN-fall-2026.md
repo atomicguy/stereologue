@@ -107,6 +107,17 @@ faults during a scroll of 500 rows; hitch rate < 1% at 120 Hz on iPad Pro.
 
 ## Phase 3 — Restoration quality track (ongoing, start after Phase 1)
 
+Status: 3.1 (evaluation set, debug eval tool, golden test) and 3.2
+(resolution tiers, downscaled rectification analysis) shipped on
+`fall-2026-revision`. The 45-card set in
+`Stereologue/Fixtures/restoration-eval.json` was auto-selected from measured
+per-eye statistics on 725 sampled cards; no NYPL scan has digitally clipped
+pixels, so "blown" ranks by bright-pixel fraction instead. Confirm categories
+visually in the Restoration Eval tool (Library toolbar, debug builds). Golden
+renders live in `StereologueTests/Fixtures/`; re-record per the comment on
+`toneStylesMatchGoldenRenders`. Next: 3.3 spike (needs a Python toolchain
+with torch + coremltools, not present on this machine).
+
 There is currently no defect-repair stage in the app. This phase builds one
 from measurement up.
 

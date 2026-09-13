@@ -75,9 +75,10 @@ struct WiggleStereoView: View {
     @Environment(\.spatialPhotoService) private var spatialPhotoService
     @Environment(\.dismiss) private var dismiss
 
-    @State private var baseLeftImage: Image?
-    @State private var baseRightImage: Image?
-    @State private var restoredImages: [RestorationStyle: (left: Image, right: Image)] = [:]
+    /// Rendered pairs keyed by style and tier. The base (original, preview)
+    /// pair is loaded first; every other variant renders on demand.
+    @State private var images: [RenderVariant: (left: Image, right: Image)] = [:]
+    @State private var fullResolution = false
 
     @State private var showingLeft = true
     @State private var isLoading = true
@@ -93,14 +94,23 @@ struct WiggleStereoView: View {
     @State private var motionManager = DeviceMotionManager()
     #endif
 
-    private var leftImage: Image? { restoredPair?.left ?? baseLeftImage }
-    private var rightImage: Image? { restoredPair?.right ?? baseRightImage }
-
-    /// The restored pair for the current style, once rendered.
-    private var restoredPair: (left: Image, right: Image)? {
-        guard let style = currentStyle else { return nil }
-        return restoredImages[style]
+    private var currentVariant: RenderVariant {
+        RenderVariant(style: currentStyle, tier: fullResolution ? .full : .preview)
     }
+
+    /// The pair to display. While the requested variant is still rendering,
+    /// falls back to the same style at the other tier, then to the base pair,
+    /// so the view never flashes empty.
+    private var displayedPair: (left: Image, right: Image)? {
+        let wanted = currentVariant
+        if let pair = images[wanted] { return pair }
+        let otherTier: RenderTier = wanted.tier == .full ? .preview : .full
+        if let pair = images[RenderVariant(style: wanted.style, tier: otherTier)] { return pair }
+        return images[RenderVariant(style: nil, tier: .preview)]
+    }
+
+    private var leftImage: Image? { displayedPair?.left }
+    private var rightImage: Image? { displayedPair?.right }
 
     var body: some View {
         ZStack {
@@ -309,6 +319,15 @@ struct WiggleStereoView: View {
                         Text(style.displayName).tag(RestorationStyle?.some(style))
                     }
                 }
+
+                Divider()
+
+                Toggle(isOn: Binding(
+                    get: { fullResolution },
+                    set: { setFullResolution($0) }
+                )) {
+                    Label("Full Resolution", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
             } label: {
                 Image(systemName: currentStyle != nil ? "wand.and.stars" : "wand.and.stars.inverse")
                     .font(.title2)
@@ -325,13 +344,9 @@ struct WiggleStereoView: View {
             isLoading = false
             return
         }
-        let cardData = card.spatialPhotoData(cropOverride: cropOverride)
-
         do {
             loadingMessage = "Loading stereo pair…"
-            let pair = try await service.croppedStereoPair(for: cardData)
-            baseLeftImage = Image(platformImage: pair.left)
-            baseRightImage = Image(platformImage: pair.right)
+            try await load(RenderVariant(style: nil, tier: .preview), service: service)
         } catch {
             self.error = String(describing: error)
         }
@@ -340,33 +355,48 @@ struct WiggleStereoView: View {
 
     private func selectStyle(_ style: RestorationStyle?) {
         currentStyle = style
-        if let style, restoredImages[style] == nil {
-            Task { await loadRestoration(style: style) }
-        }
+        ensureCurrentVariantLoaded()
     }
 
-    private func loadRestoration(style: RestorationStyle) async {
-        guard let service = spatialPhotoService else { return }
-        let cardData = card.spatialPhotoData(cropOverride: cropOverride)
+    private func setFullResolution(_ on: Bool) {
+        fullResolution = on
+        ensureCurrentVariantLoaded()
+    }
 
-        isRestoring = true
-        do {
-            let pair = try await service.croppedStereoPair(
-                for: cardData,
-                style: style
-            )
-            restoredImages[style] = (
-                Image(platformImage: pair.left),
-                Image(platformImage: pair.right)
-            )
-        } catch {
-            restorationError = error.localizedDescription
-            if currentStyle == style {
-                currentStyle = nil
+    /// Kicks off a render for the current style/tier if it isn't cached yet.
+    private func ensureCurrentVariantLoaded() {
+        let variant = currentVariant
+        guard images[variant] == nil, let service = spatialPhotoService else { return }
+        Task {
+            isRestoring = true
+            do {
+                try await load(variant, service: service)
+            } catch {
+                restorationError = error.localizedDescription
+                if let style = variant.style, currentStyle == style {
+                    currentStyle = nil
+                }
             }
+            isRestoring = false
         }
-        isRestoring = false
     }
+
+    private func load(_ variant: RenderVariant, service: SpatialPhotoService) async throws {
+        let cardData = card.spatialPhotoData(cropOverride: cropOverride)
+        let pair = try await service.croppedStereoPair(
+            for: cardData, style: variant.style, tier: variant.tier
+        )
+        images[variant] = (
+            Image(platformImage: pair.left),
+            Image(platformImage: pair.right)
+        )
+    }
+}
+
+/// One rendered look of the pair: a tone style (or the original) at a tier.
+private struct RenderVariant: Hashable {
+    let style: RestorationStyle?
+    let tier: RenderTier
 }
 
 // MARK: - Platform Image Bridging

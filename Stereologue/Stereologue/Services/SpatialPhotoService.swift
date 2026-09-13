@@ -75,14 +75,15 @@ actor SpatialPhotoService {
     // MARK: - Cache Keys
 
     /// Cache/coalescing key for one rendered variant. Every input that changes
-    /// the pixels is part of it: source quality, effective crop, and
-    /// restoration style.
+    /// the pixels is part of it: source quality, effective crop, restoration
+    /// style, and render tier.
     nonisolated static func variantKey(
         for card: SpatialPhotoCardData,
         quality: String,
-        style: RestorationStyle?
+        style: RestorationStyle?,
+        tier: RenderTier
     ) -> String {
-        var key = "\(card.uuid)_\(quality)_\(card.cropKey)"
+        var key = "\(card.uuid)_\(quality)_\(card.cropKey)_\(tier.rawValue)"
         if let style { key += "_\(style.rawValue)" }
         return key
     }
@@ -102,15 +103,18 @@ actor SpatialPhotoService {
     ///     `card.spatialPhotoData(cropOverride:)` on MainActor.
     ///   - quality: IIIF quality code for the source image (default "v" = 2560px).
     ///   - style: Tone restoration to apply, or `nil` for the original.
+    ///   - tier: `.preview` (default) caps each eye at
+    ///     `RenderTier.previewMaxWidth`; `.full` keeps source resolution.
     ///   - priority: Priority of a render started by this call. Coalesced
     ///     callers escalate an existing render automatically.
     func spatialHEICData(
         for card: SpatialPhotoCardData,
         quality: String = "v",
         style: RestorationStyle? = nil,
+        tier: RenderTier = .preview,
         priority: TaskPriority = .userInitiated
     ) async throws -> Data {
-        let variant = Self.variantKey(for: card, quality: quality, style: style)
+        let variant = Self.variantKey(for: card, quality: quality, style: style, tier: tier)
 
         if let cached = dataCache[variant] {
             logger.debug("Cache hit for spatial photo: \(variant)")
@@ -132,7 +136,7 @@ actor SpatialPhotoService {
                     }
                 }
                 let data = try await renderer.spatialHEICData(
-                    for: card, quality: quality, style: style
+                    for: card, quality: quality, style: style, tier: tier
                 )
                 cacheData(data, for: variant)
                 logger.info("Spatial photo generated in memory: \(variant)")
@@ -154,8 +158,8 @@ actor SpatialPhotoService {
         return data
     }
 
-    /// Prefetches spatial photos for the given cards at low priority.
-    /// Failures are logged but not thrown.
+    /// Prefetches preview-tier spatial photos for the given cards at low
+    /// priority. Failures are logged but not thrown.
     func prefetch(
         cards: [SpatialPhotoCardData],
         quality: String = "v",
@@ -167,7 +171,7 @@ actor SpatialPhotoService {
                 do {
                     _ = try await spatialHEICData(
                         for: card, quality: quality, style: style,
-                        priority: .utility
+                        tier: .preview, priority: .utility
                     )
                 } catch is CancellationError {
                 } catch {
@@ -181,8 +185,9 @@ actor SpatialPhotoService {
 
     /// Returns a spatial HEIC URL with card metadata embedded, suitable for sharing.
     ///
-    /// Always regenerates so the embedded IPTC/EXIF metadata is current. The
-    /// metadata must be built on MainActor by the caller.
+    /// Always regenerates (at full resolution) so the embedded IPTC/EXIF
+    /// metadata is current. The metadata must be built on MainActor by the
+    /// caller.
     func shareableSpatialPhotoURL(
         for card: SpatialPhotoCardData,
         metadata: SpatialPhotoMetadata,
@@ -194,7 +199,7 @@ actor SpatialPhotoService {
         try? FileManager.default.removeItem(at: outputURL)
 
         let data = try await renderer.spatialHEICData(
-            for: card, quality: quality, style: nil, metadata: metadata
+            for: card, quality: quality, style: nil, tier: .full, metadata: metadata
         )
         try data.write(to: outputURL)
         return outputURL
@@ -207,10 +212,11 @@ actor SpatialPhotoService {
     func croppedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String = "v",
-        style: RestorationStyle? = nil
+        style: RestorationStyle? = nil,
+        tier: RenderTier = .preview
     ) async throws -> (left: PlatformImage, right: PlatformImage) {
         let (leftFinal, rightFinal) = try await renderer.preparedStereoPair(
-            for: card, quality: quality, style: style
+            for: card, quality: quality, style: style, tier: tier
         )
 
         #if canImport(UIKit)
@@ -226,6 +232,19 @@ actor SpatialPhotoService {
         #endif
 
         return (left, right)
+    }
+
+    /// Returns the prepared eye images as `CGImage`s, uncached. For tooling
+    /// (the restoration evaluation view) that wants raw pixels to export.
+    func preparedStereoPair(
+        for card: SpatialPhotoCardData,
+        quality: String = "v",
+        style: RestorationStyle? = nil,
+        tier: RenderTier = .preview
+    ) async throws -> (left: CGImage, right: CGImage) {
+        try await renderer.preparedStereoPair(
+            for: card, quality: quality, style: style, tier: tier
+        )
     }
 
     /// Removes every cached spatial photo variant for a card (all qualities,

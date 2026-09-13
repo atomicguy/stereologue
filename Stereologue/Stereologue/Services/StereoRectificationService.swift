@@ -56,26 +56,40 @@ nonisolated final class StereoRectificationService: @unchecked Sendable {
     /// half-frame registration went bad. Correct vertical only in that case.
     private let maxRotationRadians: CGFloat = 0.0698
 
+    /// Registration runs on copies no wider than this. Vision's translational
+    /// registration cost scales with pixel count, and sub-pixel precision at
+    /// 640 px is ample once scaled back up to the full frame.
+    private let analysisMaxWidth = 640
+
     // MARK: - Public API
 
     func rectify(
         left: CGImage,
         right: CGImage
     ) throws -> (left: CGImage, right: CGImage) {
-        let (leftForAnalysis, rightForAnalysis) = cropToCommonSize(
+        let (leftCommon, rightCommon) = cropToCommonSize(
             left: left, right: right
         )
+
+        // Register on downscaled copies; the measured shift scales back up by
+        // the same factor, and rotation is scale-invariant.
+        let analysisScale = min(1.0, CGFloat(analysisMaxWidth) / CGFloat(leftCommon.width))
+        let leftForAnalysis = analysisScale < 1
+            ? (downscaled(leftCommon, by: analysisScale) ?? leftCommon) : leftCommon
+        let rightForAnalysis = analysisScale < 1
+            ? (downscaled(rightCommon, by: analysisScale) ?? rightCommon) : rightCommon
+        let appliedScale = CGFloat(leftForAnalysis.width) / CGFloat(leftCommon.width)
 
         let alignment = computeAlignment(
             reference: leftForAnalysis, floating: rightForAnalysis
         )
 
-        // Vertical shift: apply if meaningful and plausible.
-        var verticalShift = alignment.verticalShift
+        // Vertical shift (in full-frame pixels): apply if meaningful and plausible.
+        var verticalShift = alignment.verticalShift / appliedScale
         if abs(verticalShift) < minShiftPixels {
             verticalShift = 0
         } else {
-            let maxShift = CGFloat(rightForAnalysis.height) * maxShiftFraction
+            let maxShift = CGFloat(rightCommon.height) * maxShiftFraction
             if abs(verticalShift) > maxShift {
                 logger.warning(
                     "Vertical shift \(verticalShift, privacy: .public)px exceeds \(self.maxShiftFraction * 100, privacy: .public)% of height; ignoring it"
@@ -228,6 +242,23 @@ nonisolated final class StereoRectificationService: @unchecked Sendable {
             throw RectificationError.correctionFailed
         }
         return result
+    }
+
+    // MARK: - Analysis Downscale
+
+    private func downscaled(_ image: CGImage, by factor: CGFloat) -> CGImage? {
+        let width = max(1, Int((CGFloat(image.width) * factor).rounded()))
+        let height = max(1, Int((CGFloat(image.height) * factor).rounded()))
+        guard let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     // MARK: - Dimension Matching

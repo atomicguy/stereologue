@@ -11,11 +11,28 @@ import SwiftData
 struct LibraryView: View {
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
+    #if DEBUG
+    @State private var showRestorationEval = false
+    #endif
 
     var body: some View {
         LibraryGrid(searchText: debouncedSearchText)
             .navigationTitle("Stereologue")
             .searchable(text: $searchText, prompt: "Cards, subjects, creators…")
+            #if DEBUG
+            .toolbar {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("Restoration Eval", systemImage: "flask") {
+                        showRestorationEval = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showRestorationEval) {
+                NavigationStack {
+                    RestorationEvalView()
+                }
+            }
+            #endif
             // Debounce: a search runs a `localizedStandardContains` scan over
             // the whole 41K-card catalog (off the main actor, but still a full
             // scan). Rebuild only after typing pauses, not on every keystroke.
