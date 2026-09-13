@@ -382,8 +382,6 @@ When adding a new model or feature, walk through:
 - **CloudKit sync is gated behind an entitlement.** Infrastructure is in
   place in `ModelContainerSetup.swift`; flip the user container's
   configuration to `.private(...)` once the entitlement ships.
-- **No cancellation support in image services.** Long-running restoration
-  or rectification can't be interrupted by a view dismiss.
 - **Accessibility.** Dynamic Type scaling and VoiceOver labels on
   thumbnails are still TODO.
 - **macOS menu commands.** No `.commands { ... }` on the main scene yet —

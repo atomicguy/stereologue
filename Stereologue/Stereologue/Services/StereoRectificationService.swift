@@ -28,7 +28,10 @@ enum RectificationError: LocalizedError {
 /// globally match the other cancels the very parallax it's supposed to keep,
 /// flattening the scene. Instead we estimate the rigid misalignment from
 /// translational registration and apply only its vertical + rotational parts.
-actor StereoRectificationService {
+/// Holds only a thread-safe `CIContext` and a `Logger`, so it's a Sendable
+/// class rather than an actor: rectifying one pair never queues behind
+/// another, and the render task can be cancelled between stages.
+nonisolated final class StereoRectificationService: @unchecked Sendable {
 
     private let logger = Logger(
         subsystem: "net.atompowered.Stereologue",
@@ -58,7 +61,7 @@ actor StereoRectificationService {
     func rectify(
         left: CGImage,
         right: CGImage
-    ) async throws -> (left: CGImage, right: CGImage) {
+    ) throws -> (left: CGImage, right: CGImage) {
         let (leftForAnalysis, rightForAnalysis) = cropToCommonSize(
             left: left, right: right
         )
@@ -117,7 +120,7 @@ actor StereoRectificationService {
         var rotation: CGFloat
     }
 
-    private nonisolated func computeAlignment(
+    private func computeAlignment(
         reference: CGImage,
         floating: CGImage
     ) -> Alignment {
@@ -143,7 +146,7 @@ actor StereoRectificationService {
     /// Vertical component of the translational alignment of `floating` onto
     /// `reference`, or `nil` if registration fails. The horizontal component is
     /// intentionally dropped: it is the stereo parallax, which must survive.
-    private nonisolated func verticalOffset(
+    private func verticalOffset(
         reference: CGImage,
         floating: CGImage
     ) -> CGFloat? {
@@ -163,7 +166,7 @@ actor StereoRectificationService {
     /// Rotation (radians) from the difference in vertical offset between the
     /// left and right halves of the frame. Returns `0` if either half fails to
     /// register or the frame is too narrow to split.
-    private nonisolated func estimateRotation(
+    private func estimateRotation(
         reference: CGImage,
         floating: CGImage
     ) -> CGFloat {

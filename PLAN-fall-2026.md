@@ -10,7 +10,12 @@ developer, working days.
 
 ---
 
-## Phase 1 — Stop the visionOS hang (1–2 days)
+## Phase 1 — Stop the visionOS hang (1–2 days) — ✅ implemented
+
+Status: shipped on `fall-2026-revision` (see `git log`). Crop-override cache
+invalidation is done by keying on crop geometry rather than by calling
+`evict`, which keeps `UserDataService` decoupled from the photo service.
+Remaining: measure the done-when numbers on hardware.
 
 Goal: picking a restoration style in the spatial viewer returns in seconds and
 never blocks navigation. No new algorithms; this is defaults, scheduling, and

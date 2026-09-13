@@ -34,9 +34,16 @@ struct SpatialPhotoView: View {
     @State private var isLoading = false
     @State private var isRestoring = false
     @State private var currentStyle: RestorationStyle?
+    /// Whether the slow stereo-aware defect/highlight repair runs. Off by
+    /// default and only ever turned on by the user for the card in view;
+    /// prefetch never uses it.
+    @State private var deepRestore = false
     @State private var displayedCardUUID: String?
     @State private var useFadeTransition = false
     @State private var isFavorite = false
+    @State private var loadError: String?
+    /// The in-progress restoration render, so the spinner can cancel it.
+    @State private var restoreTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader3D { geometry in
@@ -44,7 +51,7 @@ struct SpatialPhotoView: View {
                 // Spatial photo with push transition
                 if let spatialPhotoData {
                     spatialPhotoContent(data: spatialPhotoData, geometry: geometry)
-                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")")
+                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")_\(deepRestore)")
                         .transition(photoTransition)
                 } else if isLoading {
                     ProgressView()
@@ -80,6 +87,21 @@ struct SpatialPhotoView: View {
                 dismiss()
             }
         }
+        .alert("Restoration Failed", isPresented: .init(
+            get: { loadError != nil },
+            set: { if !$0 { loadError = nil } }
+        )) {
+            Button("OK") { loadError = nil }
+        } message: {
+            Text(loadError ?? "")
+        }
+    }
+
+    /// Snapshot of the card plus any user crop override, built on MainActor.
+    private func cardData(for card: StereoCard) -> SpatialPhotoCardData {
+        card.spatialPhotoData(
+            cropOverride: userDataService.cropOverride(for: card.uuid)
+        )
     }
 
     private func refreshFavoriteState() {
@@ -277,20 +299,39 @@ struct SpatialPhotoView: View {
                 .padding(.horizontal, 12)
 
             if isRestoring {
-                ProgressView()
-                    .controlSize(.small)
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Button {
+                        restoreTask?.cancel()
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel restoration")
+                }
             } else {
                 Menu {
                     Picker("Restoration", selection: Binding(
                         get: { currentStyle },
                         set: { newStyle in
-                            Task { await applyStyle(newStyle) }
+                            applyVariant(style: newStyle, deep: deepRestore)
                         }
                     )) {
                         Text("Original").tag(RestorationStyle?.none)
                         ForEach(RestorationStyle.allCases) { style in
                             Text(style.displayName).tag(RestorationStyle?.some(style))
                         }
+                    }
+
+                    Divider()
+
+                    Toggle(isOn: Binding(
+                        get: { deepRestore },
+                        set: { applyVariant(style: currentStyle, deep: $0) }
+                    )) {
+                        Label("Deep Restore (slower)", systemImage: "sparkles")
                     }
                 } label: {
                     Image(systemName: currentStyle != nil ? "wand.and.stars" : "wand.and.stars.inverse")
@@ -349,58 +390,75 @@ struct SpatialPhotoView: View {
     private func loadSpatialPhoto() async {
         guard let card = viewModel.currentCard,
               card.hasStereoDetections else { return }
-        let cardData = card.spatialPhotoData()
+        let cardData = cardData(for: card)
         let cardUUID = card.uuid
 
+        // Navigating away cancels any restoration still rendering for the
+        // previous card.
+        restoreTask?.cancel()
+        isRestoring = false
         isLoading = true
         useFadeTransition = false
 
         do {
             let data = try await spatialPhotoService.spatialHEICData(
-                for: cardData, style: currentStyle
+                for: cardData, style: currentStyle, deep: deepRestore
             )
             withAnimation(.easeInOut(duration: 0.35)) {
                 spatialPhotoData = data
                 displayedCardUUID = cardUUID
             }
             prefetchAdjacent()
+        } catch is CancellationError {
+            // Superseded by a newer card; the newer task owns the state now.
+            return
         } catch {
             logger.error("Failed to create spatial photo: \(error.localizedDescription)")
+            loadError = error.localizedDescription
         }
         isLoading = false
     }
 
-    private func applyStyle(_ style: RestorationStyle?) async {
+    /// Renders the current card with the requested style/depth. The previous
+    /// in-progress render (if any) is cancelled first, so rapid menu changes
+    /// don't pile up.
+    private func applyVariant(style: RestorationStyle?, deep: Bool) {
         guard let card = viewModel.currentCard,
               card.hasStereoDetections else { return }
-        let cardData = card.spatialPhotoData()
+        let cardData = cardData(for: card)
         let cardUUID = card.uuid
 
+        restoreTask?.cancel()
         isRestoring = true
-
-        do {
-            let data = try await spatialPhotoService.spatialHEICData(
-                for: cardData,
-                style: style
-            )
-            useFadeTransition = true
-            withAnimation(.easeInOut(duration: 0.35)) {
-                spatialPhotoData = data
-                displayedCardUUID = cardUUID
-                currentStyle = style
+        restoreTask = Task {
+            defer { isRestoring = false }
+            do {
+                let data = try await spatialPhotoService.spatialHEICData(
+                    for: cardData, style: style, deep: deep
+                )
+                useFadeTransition = true
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    spatialPhotoData = data
+                    displayedCardUUID = cardUUID
+                    currentStyle = style
+                    deepRestore = deep
+                }
+            } catch is CancellationError {
+                // User cancelled or changed their mind; keep what's showing.
+            } catch {
+                logger.error("Failed to create spatial photo: \(error.localizedDescription)")
+                loadError = error.localizedDescription
             }
-        } catch {
-            logger.error("Failed to create spatial photo: \(error.localizedDescription)")
         }
-        isRestoring = false
     }
 
+    /// Warms the neighbors at the current style, never deep.
     private func prefetchAdjacent() {
         guard let idx = viewModel.currentIndex else { return }
         var adjacent: [SpatialPhotoCardData] = []
-        if idx > 0 { adjacent.append(viewModel.cards[idx - 1].spatialPhotoData()) }
+        if idx > 0 { adjacent.append(cardData(for: viewModel.cards[idx - 1])) }
         if idx < viewModel.cards.count - 1 {
-            adjacent.append(viewModel.cards[idx + 1].spatialPhotoData())
+            adjacent.append(cardData(for: viewModel.cards[idx + 1]))
         }
         let style = currentStyle
         Task {
