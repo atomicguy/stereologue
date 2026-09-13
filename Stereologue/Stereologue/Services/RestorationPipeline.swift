@@ -68,7 +68,15 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func restore(_ cgImage: CGImage, style: RestorationStyle = .enhance) -> CGImage {
+    /// Applies tone/contrast restoration for the given style.
+    ///
+    /// Tone-only: dust/scratch repair is handled separately by
+    /// `StereoPairProcessor`, which uses the other eye of the pair as
+    /// reference rather than a single-image denoiser.
+    func restore(
+        _ cgImage: CGImage,
+        style: RestorationStyle = .enhance
+    ) -> CGImage {
         let image = ingest(cgImage)
         let result: CGImage?
         switch style {
@@ -81,12 +89,7 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
             logger.warning("Restoration render failed, returning original")
             return cgImage
         }
-
-        // Dust/scratch/grain removal (SCUNet, converted per
-        // stereoview-restoration-guide.md). Falls back to a no-op if the
-        // model fails to load for any reason.
-        guard let scunet = SCUNetModel.shared else { return result }
-        return SCUNetDenoiser(model: scunet).apply(to: result)
+        return result
     }
 
     /// Evens out overall brightness between the two eyes of a stereo pair.
@@ -114,8 +117,23 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
             return (left, right)
         }
 
-        let targetMean = (leftStats.mean + rightStats.mean) / 2
-        let targetStd = (leftStats.std + rightStats.std) / 2
+        // Choose the target tonal envelope. When one eye is meaningfully more
+        // blown out than the other, match toward the *better-exposed* (less
+        // clipped) eye rather than the midpoint — pulling both toward an average
+        // would drag the good eye toward the blown one. When clipping is
+        // comparable, fall back to the symmetric average.
+        let leftClip = clipFraction(leftPixels)
+        let rightClip = clipFraction(rightPixels)
+        let targetMean: Float
+        let targetStd: Float
+        if abs(leftClip - rightClip) > 0.01 {
+            let reference = leftClip <= rightClip ? leftStats : rightStats
+            targetMean = reference.mean
+            targetStd = reference.std
+        } else {
+            targetMean = (leftStats.mean + rightStats.mean) / 2
+            targetStd = (leftStats.std + rightStats.std) / 2
+        }
 
         let newLeft = applyLuminanceAffine(
             left, pixels: leftPixels,
@@ -140,8 +158,15 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     /// Neutralize color cast, stretch tonal range robustly, then boost local
     /// contrast. The per-channel stretch doubles as a rough white balance.
     private func enhance(_ image: CIImage) -> CGImage? {
-        guard var buffer = read(neutralizeSepia(image)) else { return nil }
+        guard var buffer = read(image) else { return nil }
+        // Data-driven white balance (shades-of-gray) neutralizes whatever color
+        // cast the print has, without the old fixed sepia curve's assumption
+        // about which cast it is.
+        autoWhiteBalance(&buffer.pixels, count: buffer.count)
         percentileStretchPerChannel(&buffer.pixels, count: buffer.count, lowPct: 0.01, highPct: 0.99)
+        // Correct globally faded/dark or over-bright scans toward a mid-tone
+        // target (color-preserving gamma).
+        autoExposure(&buffer.pixels, count: buffer.count)
         var clahe = CLAHEProcessor()
         clahe.tileSize = 128
         clahe.clipLimit = 2.0
@@ -160,6 +185,9 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
     private func preserveTone(_ image: CIImage) -> CGImage? {
         guard var buffer = read(image) else { return nil }
         percentileStretchLuminance(&buffer.pixels, count: buffer.count, lowPct: 0.01, highPct: 0.99)
+        // Color-preserving auto-exposure, so faded prints are lifted while
+        // sepia/hand-tinting stays intact.
+        autoExposure(&buffer.pixels, count: buffer.count)
         var clahe = CLAHEProcessor()
         clahe.tileSize = 160
         clahe.clipLimit = 1.6
@@ -201,15 +229,101 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         return Buffer(pixels: pixels, width: cg.width, height: cg.height, colorSpace: cg.colorSpace)
     }
 
-    // MARK: - Stage: Sepia / Color Cast Neutralization
+    // MARK: - Stage: Auto White Balance
 
-    private func neutralizeSepia(_ image: CIImage) -> CIImage {
-        guard let filter = CIFilter(name: "CIColorPolynomial") else { return image }
-        filter.setValue(image, forKey: kCIInputImageKey)
-        filter.setValue(CIVector(x: 0.0, y: 0.92, z: 0.0, w: 0.0), forKey: "inputRedCoefficients")
-        filter.setValue(CIVector(x: 0.0, y: 1.00, z: 0.0, w: 0.0), forKey: "inputGreenCoefficients")
-        filter.setValue(CIVector(x: 0.02, y: 1.06, z: 0.0, w: 0.0), forKey: "inputBlueCoefficients")
-        return filter.outputImage ?? image
+    /// Shades-of-gray (Minkowski p=6) white balance: estimate the illuminant
+    /// from the p-norm mean of each channel, then scale channels so that
+    /// estimate goes neutral. More robust than plain gray-world on scenes with a
+    /// dominant color, and — unlike a fixed sepia curve — it adapts to whatever
+    /// cast the individual print actually has. Gains are clamped and a near-unit
+    /// correction is skipped, so it's a no-op on already-neutral images.
+    private func autoWhiteBalance(_ pixels: inout [UInt8], count: Int) {
+        guard count > 0 else { return }
+        let p = 6.0
+        let stride = analysisStride(count)
+        var sumR = 0.0, sumG = 0.0, sumB = 0.0
+        var samples = 0
+        pixels.withUnsafeBufferPointer { src in
+            var i = 0
+            while i < count {
+                let base = i * 4
+                sumR += pow(Double(src[base]) / 255.0, p)
+                sumG += pow(Double(src[base + 1]) / 255.0, p)
+                sumB += pow(Double(src[base + 2]) / 255.0, p)
+                samples += 1
+                i += stride
+            }
+        }
+        guard samples > 0 else { return }
+        let meanR = Float(pow(sumR / Double(samples), 1.0 / p))
+        let meanG = Float(pow(sumG / Double(samples), 1.0 / p))
+        let meanB = Float(pow(sumB / Double(samples), 1.0 / p))
+        guard meanR > 0.001, meanG > 0.001, meanB > 0.001 else { return }
+
+        let gray = (meanR + meanG + meanB) / 3
+        let gainR = min(max(gray / meanR, 0.5), 2.0)
+        let gainG = min(max(gray / meanG, 0.5), 2.0)
+        let gainB = min(max(gray / meanB, 0.5), 2.0)
+
+        // Already neutral — skip the writeback.
+        if abs(gainR - 1) < 0.03 && abs(gainG - 1) < 0.03 && abs(gainB - 1) < 0.03 {
+            return
+        }
+
+        pixels.withUnsafeMutableBufferPointer { out in
+            for i in 0..<count {
+                let base = i * 4
+                out[base] = clampNormalizedByte(Float(out[base]) / 255.0 * gainR)
+                out[base + 1] = clampNormalizedByte(Float(out[base + 1]) / 255.0 * gainG)
+                out[base + 2] = clampNormalizedByte(Float(out[base + 2]) / 255.0 * gainB)
+            }
+        }
+    }
+
+    // MARK: - Stage: Auto Exposure
+
+    /// Color-preserving auto-exposure. Nudges the image's mean luminance toward
+    /// a mid-tone target with a global gamma, scaling RGB by the luminance ratio
+    /// so hue/saturation are untouched. Gamma is clamped and near-unit
+    /// corrections are skipped, so a well-exposed image passes through unchanged.
+    private func autoExposure(_ pixels: inout [UInt8], count: Int, target: Float = 0.5) {
+        guard count > 0 else { return }
+        let stride = analysisStride(count)
+        var sum: Float = 0
+        var samples = 0
+        pixels.withUnsafeBufferPointer { src in
+            var i = 0
+            while i < count {
+                let base = i * 4
+                sum += 0.2126 * Float(src[base]) / 255.0
+                    + 0.7152 * Float(src[base + 1]) / 255.0
+                    + 0.0722 * Float(src[base + 2]) / 255.0
+                samples += 1
+                i += stride
+            }
+        }
+        guard samples > 0 else { return }
+        let mean = sum / Float(samples)
+        guard mean > 0.02, mean < 0.98 else { return }
+
+        var gamma = log(target) / log(mean)
+        gamma = min(max(gamma, 0.5), 2.0)
+        if abs(gamma - 1) < 0.05 { return }
+
+        pixels.withUnsafeMutableBufferPointer { out in
+            for i in 0..<count {
+                let base = i * 4
+                let r = Float(out[base]) / 255.0
+                let g = Float(out[base + 1]) / 255.0
+                let b = Float(out[base + 2]) / 255.0
+                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                guard l > 0.001 else { continue }
+                let ratio = pow(l, gamma) / l
+                out[base] = clampNormalizedByte(r * ratio)
+                out[base + 1] = clampNormalizedByte(g * ratio)
+                out[base + 2] = clampNormalizedByte(b * ratio)
+            }
+        }
     }
 
     // MARK: - Stage: Percentile Contrast Stretch
@@ -524,6 +638,31 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
         let mean = sum / Float(samples)
         let variance = max(0, sumSq / Float(samples) - mean * mean)
         return (mean, variance.squareRoot())
+    }
+
+    /// Fraction of pixels whose luminance is at or above the near-clipping
+    /// threshold (0.97), across a strided sample. A rough "how blown out is this
+    /// eye" measure used to pick the exposure-match reference.
+    private func clipFraction(_ pixels: [UInt8]) -> Float {
+        let count = pixels.count / 4
+        guard count > 0 else { return 0 }
+        let stride = analysisStride(count)
+        var clipped = 0
+        var samples = 0
+        pixels.withUnsafeBufferPointer { src in
+            var i = 0
+            while i < count {
+                let base = i * 4
+                let r = Float(src[base]) / 255.0
+                let g = Float(src[base + 1]) / 255.0
+                let b = Float(src[base + 2]) / 255.0
+                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                if l >= 0.97 { clipped += 1 }
+                samples += 1
+                i += stride
+            }
+        }
+        return samples > 0 ? Float(clipped) / Float(samples) : 0
     }
 
     /// Remaps one image's luminance via `(l - sourceMean) * gain + targetMean`,

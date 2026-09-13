@@ -14,19 +14,20 @@ enum RectificationError: LocalizedError {
     }
 }
 
-/// Removes vertical misalignment between the two frames of a stereoview card
-/// while preserving horizontal parallax.
+/// Removes vertical misalignment and in-plane tilt between the two frames of a
+/// stereoview card while preserving horizontal parallax.
 ///
 /// A stereo pair differs by two things: horizontal *parallax* — the depth cue
-/// that makes the spatial photo work — and unwanted *vertical* misalignment
-/// introduced when the two prints were mounted and the card was scanned.
+/// that makes the spatial photo work — and unwanted *rigid* misalignment
+/// (vertical offset plus a small rotation) introduced when the two prints were
+/// mounted and the card was scanned.
 ///
-/// The correct operation is therefore to null out the vertical offset and
-/// leave the horizontal offset alone. We deliberately do **not** use a full
+/// The correct operation is to null out the vertical offset and tilt and leave
+/// the horizontal offset alone. We deliberately do **not** use a full
 /// homography (`VNHomographicImageRegistrationRequest`): morphing one frame to
 /// globally match the other cancels the very parallax it's supposed to keep,
-/// flattening the scene. Instead we estimate the global translation between
-/// the frames and apply only its vertical component.
+/// flattening the scene. Instead we estimate the rigid misalignment from
+/// translational registration and apply only its vertical + rotational parts.
 actor StereoRectificationService {
 
     private let logger = Logger(
@@ -44,6 +45,14 @@ actor StereoRectificationService {
     /// frames of the same card are never off by a quarter of their height.
     private let maxShiftFraction: CGFloat = 0.25
 
+    /// In-plane rotations below this (radians, ~0.086°) aren't worth the
+    /// resample they'd cost.
+    private let minRotationRadians: CGFloat = 0.0015
+
+    /// A tilt beyond this (radians, ~4°) isn't a real scan misalignment — a
+    /// half-frame registration went bad. Correct vertical only in that case.
+    private let maxRotationRadians: CGFloat = 0.0698
+
     // MARK: - Public API
 
     func rectify(
@@ -54,44 +63,90 @@ actor StereoRectificationService {
             left: left, right: right
         )
 
-        // Estimate the global shift that best aligns the right frame onto the
-        // left. tx captures the (depth-dependent) horizontal parallax and is
-        // discarded; ty is the vertical misalignment we want to remove.
-        let verticalShift = computeVerticalShift(
+        let alignment = computeAlignment(
             reference: leftForAnalysis, floating: rightForAnalysis
         )
 
-        guard abs(verticalShift) >= minShiftPixels else {
-            logger.info("Stereo pair already vertically aligned; nothing to correct")
-            return (left, right)
+        // Vertical shift: apply if meaningful and plausible.
+        var verticalShift = alignment.verticalShift
+        if abs(verticalShift) < minShiftPixels {
+            verticalShift = 0
+        } else {
+            let maxShift = CGFloat(rightForAnalysis.height) * maxShiftFraction
+            if abs(verticalShift) > maxShift {
+                logger.warning(
+                    "Vertical shift \(verticalShift, privacy: .public)px exceeds \(self.maxShiftFraction * 100, privacy: .public)% of height; ignoring it"
+                )
+                verticalShift = 0
+            }
         }
 
-        let maxShift = CGFloat(rightForAnalysis.height) * maxShiftFraction
-        guard abs(verticalShift) <= maxShift else {
+        // Rotation: apply if meaningful and plausible.
+        var rotation = alignment.rotation
+        if abs(rotation) > maxRotationRadians {
             logger.warning(
-                "Vertical shift \(verticalShift, privacy: .public)px exceeds \(self.maxShiftFraction * 100, privacy: .public)% of height; skipping rectification"
+                "In-plane rotation \(rotation, privacy: .public)rad implausible; ignoring it"
             )
+            rotation = 0
+        } else if abs(rotation) < minRotationRadians {
+            rotation = 0
+        }
+
+        guard verticalShift != 0 || rotation != 0 else {
+            logger.info("Stereo pair already aligned; nothing to correct")
             return (left, right)
         }
 
-        let corrected = try applyVerticalShift(verticalShift, to: right)
+        let corrected = try applyCorrection(
+            verticalShift: verticalShift, rotation: rotation, to: right
+        )
         logger.info(
-            "Stereo rectification applied (Δy=\(verticalShift, privacy: .public)px)"
+            "Stereo rectification applied (Δy=\(verticalShift, privacy: .public)px, θ=\(rotation, privacy: .public)rad)"
         )
         return (left, corrected)
     }
 
-    // MARK: - Vertical Shift Estimation
+    // MARK: - Alignment Estimation
 
-    /// Returns the vertical offset (in pixels of the analysis images) that best
-    /// aligns `floating` onto `reference`, or `0` if registration fails.
-    ///
-    /// The horizontal component of the alignment is intentionally ignored: it
-    /// is the stereo parallax, which must be preserved.
-    private nonisolated func computeVerticalShift(
+    /// The rigid misalignment of the right frame relative to the left, minus
+    /// the horizontal (parallax) component.
+    private struct Alignment {
+        /// Vertical offset in pixels of the analysis images.
+        var verticalShift: CGFloat
+        /// In-plane rotation in radians (counter-clockwise positive).
+        var rotation: CGFloat
+    }
+
+    private nonisolated func computeAlignment(
         reference: CGImage,
         floating: CGImage
-    ) -> CGFloat {
+    ) -> Alignment {
+        // Whole-image vertical offset — the most robust measurement, and what
+        // drives the primary correction.
+        let verticalShift = verticalOffset(
+            reference: reference, floating: floating
+        ) ?? 0
+
+        // Estimate tilt from how that vertical offset varies across the frame:
+        // split into left and right halves and register each independently. A
+        // rotation shows up as a different vertical offset on the two sides, and
+        // its gradient over the halves' horizontal separation is the angle.
+        //
+        // Deriving rotation from the same translational measurement (rather than
+        // decomposing a homography) keeps its sign convention identical to the
+        // vertical correction, so both move the image the same, correct way.
+        let rotation = estimateRotation(reference: reference, floating: floating)
+
+        return Alignment(verticalShift: verticalShift, rotation: rotation)
+    }
+
+    /// Vertical component of the translational alignment of `floating` onto
+    /// `reference`, or `nil` if registration fails. The horizontal component is
+    /// intentionally dropped: it is the stereo parallax, which must survive.
+    private nonisolated func verticalOffset(
+        reference: CGImage,
+        floating: CGImage
+    ) -> CGFloat? {
         let request = VNTranslationalImageRegistrationRequest(
             targetedCGImage: floating
         )
@@ -99,25 +154,69 @@ actor StereoRectificationService {
         do {
             try handler.perform([request])
         } catch {
-            return 0
+            return nil
         }
-        guard let result = request.results?.first else { return 0 }
+        guard let result = request.results?.first else { return nil }
         return result.alignmentTransform.ty
     }
 
-    // MARK: - Vertical Shift Application
+    /// Rotation (radians) from the difference in vertical offset between the
+    /// left and right halves of the frame. Returns `0` if either half fails to
+    /// register or the frame is too narrow to split.
+    private nonisolated func estimateRotation(
+        reference: CGImage,
+        floating: CGImage
+    ) -> CGFloat {
+        let w = reference.width
+        let h = reference.height
+        let leftW = w / 2
+        let rightW = w - leftW
+        guard leftW > 0, rightW > 0 else { return 0 }
 
-    private func applyVerticalShift(
-        _ dy: CGFloat,
+        let leftRect = CGRect(x: 0, y: 0, width: leftW, height: h)
+        let rightRect = CGRect(x: leftW, y: 0, width: rightW, height: h)
+
+        guard let refLeft = reference.cropping(to: leftRect),
+              let floLeft = floating.cropping(to: leftRect),
+              let refRight = reference.cropping(to: rightRect),
+              let floRight = floating.cropping(to: rightRect),
+              let tyLeft = verticalOffset(reference: refLeft, floating: floLeft),
+              let tyRight = verticalOffset(reference: refRight, floating: floRight)
+        else { return 0 }
+
+        // The two halves' centroids sit half the frame width apart (w/4 and
+        // 3w/4), so the vertical-offset gradient per pixel — i.e. the small
+        // angle in radians — is the difference divided by w/2.
+        let separation = CGFloat(w) / 2
+        return (tyRight - tyLeft) / separation
+    }
+
+    // MARK: - Correction Application
+
+    private func applyCorrection(
+        verticalShift dy: CGFloat,
+        rotation: CGFloat,
         to image: CGImage
     ) throws -> CGImage {
         let ciImage = CIImage(cgImage: image)
+
+        var transform = CGAffineTransform.identity
+        if rotation != 0 {
+            // Rotate about the image center so the tilt is corrected in place.
+            let cx = CGFloat(image.width) / 2
+            let cy = CGFloat(image.height) / 2
+            transform = CGAffineTransform(translationX: -cx, y: -cy)
+                .concatenating(CGAffineTransform(rotationAngle: rotation))
+                .concatenating(CGAffineTransform(translationX: cx, y: cy))
+        }
         // Vertical translation only — no horizontal component, so parallax is
-        // untouched. Same Core Image transform path the previous fallback used,
-        // so the sign/orientation convention is unchanged.
-        let shifted = ciImage.transformed(
-            by: CGAffineTransform(translationX: 0, y: dy)
+        // untouched. Same Core Image transform path the vertical-only version
+        // used, so the sign/orientation convention is unchanged.
+        transform = transform.concatenating(
+            CGAffineTransform(translationX: 0, y: dy)
         )
+
+        let shifted = ciImage.transformed(by: transform)
         let cropRect = CGRect(
             x: 0, y: 0,
             width: CGFloat(image.width), height: CGFloat(image.height)

@@ -3,7 +3,7 @@
 ## Context & Assumptions
 
 - The caller has already detected and cropped the left/right stereo halves into two `CGImage` or `CIImage` values. The pipeline receives these as inputs.
-- Both halves must be processed **identically and independently** through Stages 1–3, then passed together into Stage 5.
+- Both halves must be processed **identically and independently** through Stages 1–2, then passed together into Stages 3 and 5.
 - Target: Swift/SwiftUI, macOS 14+, Apple Silicon primary (Intel fallback).
 - All ML inference runs on-device; no network calls.
 
@@ -150,136 +150,25 @@ func applyToneCurve(_ image: CIImage) -> CIImage {
 
 ---
 
-## Stage 3 — SCUNet: Dust, Scratch & Grain Removal
+## Stage 3 — Dust & Scratch Repair (stereo-aware)
 
-### 3a. Model Setup
+Single-image ML denoisers were tried here (SCUNet, tiled at 512×512 through
+Core ML) and removed: on visionOS the tiled inference was too slow to be
+interactive, and the results on scanned albumen/silver-gelatin prints were
+not reliably better than the input.
 
-```swift
-// RestorationModel.swift
-import CoreML
+The current approach exploits the stereo pair instead. A blemish on one
+print almost never lands on the same scene point of the other print, so
+`StereoPairProcessor` detects defects (morphological top-hat/bottom-hat),
+computes dense optical flow between the eyes (`VNGenerateOpticalFlowRequest`),
+and fills each defect from the disparity-corresponding pixels of the sibling
+eye, falling back to neighborhood inpainting where the flow disagrees. Blown
+highlights are recovered the same way. This runs only on the deliberate
+"deep" path.
 
-final class SCUNetModel {
-    static let shared = SCUNetModel()
-    let model: MLModel
-
-    private init() {
-        let config = MLModelConfiguration()
-        // Apple Silicon: ANE + CPU. Intel: GPU + CPU.
-        config.computeUnits = ProcessInfo.processInfo.processorCount > 8
-            ? .cpuAndNeuralEngine   // M-series
-            : .cpuAndGPU            // Intel fallback
-        let url = Bundle.main.url(forResource: "SCUNet_color_real", withExtension: "mlpackage")!
-        model = try! MLModel(contentsOf: url, configuration: config)
-    }
-}
-```
-
-**Decision:** `.cpuAndNeuralEngine` — **not** `.all`. Using `.all` on Apple Silicon silently routes eligible ops to GPU instead of ANE, costing ~24% throughput. Detect M-series by core count (>8 efficiency + performance cores) or `ProcessInfo.processInfo.machineHardwareName`.
-
-### 3b. Tiled Inference with Hann Window Blending
-
-**Decision:** Tile at 512×512 with 64 px overlap. This is SCUNet's effective receptive field boundary; smaller tiles introduce visible seams, larger tiles waste memory.
-
-```swift
-// TiledInference.swift
-func runSCUNet(on image: CIImage, context: CIContext) -> CIImage {
-    let tileSize  = 512
-    let overlap   = 64
-    let stride    = tileSize - overlap
-    let extent    = image.extent
-    let model     = SCUNetModel.shared.model
-
-    // Accumulator buffers (Float32, linear RGB)
-    var accumRGB    = [Float](repeating: 0, count: Int(extent.width * extent.height) * 3)
-    var accumWeight = [Float](repeating: 0, count: Int(extent.width * extent.height))
-
-    // Pre-compute Hann window for this tile size
-    let hannWindow = makeHannWindow(size: tileSize) // see below
-
-    for row in stride(from: 0, through: Int(extent.height) - 1, by: stride) {
-        for col in stride(from: 0, through: Int(extent.width) - 1, by: stride) {
-            let tileRect = CGRect(
-                x: CGFloat(col), y: CGFloat(row),
-                width: CGFloat(tileSize), height: CGFloat(tileSize)
-            ).intersection(extent)
-
-            // Crop tile, pad to 512×512 if near edge
-            let tileCI = image.cropped(to: tileRect)
-                              .paddedToSize(tileSize, context: context)  // helper
-
-            // Run model
-            let input  = try! MLDictionaryFeatureProvider(dictionary: ["image": tileCIToMLBuffer(tileCI)])
-            let output = try! model.prediction(from: input)
-            let outBuf = output.featureValue(for: "output")!.multiArrayValue!
-
-            // Accumulate into full-image buffer, weighted by Hann window
-            blendTileIntoAccumulator(
-                tile: outBuf, hann: hannWindow,
-                into: &accumRGB, weights: &accumWeight,
-                at: (col, row), imageWidth: Int(extent.width)
-            )
-        }
-    }
-
-    // Normalize and convert accumulator back to CIImage
-    return accumulatorToCIImage(accumRGB, accumWeight, extent: extent)
-}
-
-func makeHannWindow(size: Int) -> [Float] {
-    // 2D separable Hann: w[i,j] = hann1D[i] * hann1D[j]
-    let hann1D = (0..<size).map { i in
-        0.5 * (1 - cos(2 * .pi * Float(i) / Float(size - 1)))
-    }
-    return (0..<size).flatMap { row in
-        (0..<size).map { col in hann1D[row] * hann1D[col] }
-    }
-}
-```
-
-**File organization (DRY):**
-- `SCUNetModel.swift` — singleton model wrapper, compute unit selection
-- `TiledInference.swift` — tiling loop, Hann accumulation, normalization
-- `MLBufferHelpers.swift` — `tileCIToMLBuffer(_:)`, `accumulatorToCIImage(_:_:extent:)`
-- `CIImageExtensions.swift` — `paddedToSize(_:context:)`, `matchedToWorkingSpace(from:)`
-
-### 3c. Model Conversion Reference (Python, run offline)
-
-```python
-import torch, coremltools as ct
-
-# Load pretrained SCUNet (color_real variant)
-model = SCUNet(in_nc=3, config=[4,4,4,4,4,4,4], dim=64)
-model.load_state_dict(torch.load("scunet_color_real_psnr.pth"))
-model.eval()
-
-# Pre-compute relative-position-bias tensors as buffers (avoids trace issues)
-# See: github.com/john-rocky/CoreML-Models/blob/master/docs/coreml_conversion_notes.md
-patch_rpb_as_buffers(model)  # your helper
-
-ts = torch.jit.trace(model, torch.rand(1, 3, 512, 512))
-
-mlmodel = ct.convert(
-    ts,
-    inputs=[ct.ImageType(name="image", shape=(1,3,512,512), scale=1/255.0)],
-    outputs=[ct.ImageType(name="output")],
-    compute_precision=ct.precision.FLOAT16,
-    convert_to="mlprogram",
-    minimum_deployment_target=ct.target.macOS14,
-)
-
-# Optional: 6-bit palettization (~37% size reduction, negligible quality loss)
-from coremltools.optimize.coreml import palettize_weights, OptimizationConfig, OpPalettizerConfig
-config = OptimizationConfig(global_config=OpPalettizerConfig(nbits=6, mode="kmeans"))
-mlmodel = palettize_weights(mlmodel, config)
-
-mlmodel.save("SCUNet_color_real.mlpackage")
-```
-
-**Conversion gotchas:**
-- `torch.roll` (Swin shifted windows) must be replaced with `slice + cat` before tracing
-- `expand(-1, ...)` crashes coremltools <9.0; use coremltools ≥9.0
-- Bicubic resize with `antialias=True` does not trace; use bilinear or nearest
-- Tile inputs must be **static 512×512** — `RangeDim` falls off ANE entirely
+A learned scratch *detector* (e.g. the U-Net from *Bringing Old Photos Back
+to Life*) would slot in as a drop-in replacement for the morphological
+detector; the fill stage is unchanged.
 
 ---
 
@@ -367,7 +256,7 @@ actor RestorationPipeline {
     init(context: CIContext) { self.context = context }
 
     func restore(left: CIImage, right: CIImage) async throws -> (CIImage, CIImage) {
-        // Stages 1–3 are identical and independent per half — run concurrently.
+        // Stages 1–2 are identical and independent per half — run concurrently.
         async let restoredLeft  = restoreHalf(left)
         async let restoredRight = restoreHalf(right)
         let (l, r) = try await (restoredLeft, restoredRight)
@@ -383,7 +272,6 @@ actor RestorationPipeline {
         img = stretchContrast(img, context: context)         // Stage 2b
         img = applyCLAHE(img, context: context)              // Stage 2c
         img = applyToneCurve(img)                            // Stage 2d
-        img = runSCUNet(on: img, context: context)           // Stage 3
         return img
     }
 }
@@ -397,12 +285,4 @@ actor RestorationPipeline {
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| Tile size | 512 × 512 | SCUNet receptive field boundary |
-| Tile overlap | 64 px | Eliminates seam artifacts |
 | CLAHE tile | 128 px | Good default for ~1500 px wide scan |
-| Compute units (M-series) | `.cpuAndNeuralEngine` | ~24% faster than `.all` |
-| Compute units (Intel) | `.cpuAndGPU` | No ANE available |
-| Model precision | FP16 | Half memory, ANE-native |
-| Palettization | 6-bit per-group | ~37% size reduction, negligible loss |
-| SCUNet disk size (FP16) | ~35 MB | Unpalettized |
-| SCUNet disk size (6-bit) | ~13 MB | Palettized |

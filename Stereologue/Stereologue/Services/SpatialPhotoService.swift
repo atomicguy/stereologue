@@ -164,6 +164,10 @@ actor SpatialPhotoService {
     /// Tone and contrast restoration for scanned prints.
     private let restorationPipeline = RestorationPipeline()
 
+    /// Stereo-aware defect removal + highlight recovery (deep path only).
+    /// Shares one bidirectional optical-flow computation across both repairs.
+    private let stereoProcessor = StereoPairProcessor()
+
     // MARK: - Stereoview Camera Defaults
 
     /// Baseline (interaxial distance) in meters.
@@ -216,13 +220,16 @@ actor SpatialPhotoService {
     func spatialHEICData(
         for card: SpatialPhotoCardData,
         quality: String = "v",
-        style: RestorationStyle? = nil
+        style: RestorationStyle? = nil,
+        deep: Bool = true
     ) async throws -> Data {
-        // Quality and style are part of the key: two callers requesting the same
-        // card at different resolutions/styles must not coalesce onto one task
-        // or alias the same cache entry.
+        // Quality, style, and depth are part of the key: two callers requesting
+        // the same card at different resolutions/styles/depths must not coalesce
+        // onto one task or alias the same cache entry. `deep` selects the
+        // stereo-aware defect/highlight repair pass (`StereoPairProcessor`).
         let suffix = style.map { "_restored_\($0.rawValue)" } ?? ""
-        let variant = "\(card.uuid)_\(quality)\(suffix)"
+        let depthSuffix = (style != nil && !deep) ? "_fast" : ""
+        let variant = "\(card.uuid)_\(quality)\(suffix)\(depthSuffix)"
 
         if let cached = dataCache[variant] {
             logger.debug("Cache hit for spatial photo: \(variant)")
@@ -237,7 +244,7 @@ actor SpatialPhotoService {
         let task = Task<Data, Error> {
             defer { inFlightTasks[variant] = nil }
             let (left, right) = try await preparedStereoPair(
-                for: card, quality: quality, style: style
+                for: card, quality: quality, style: style, deep: deep
             )
             let data = try makeSpatialHEICData(leftImage: left, rightImage: right)
             cacheData(data, for: variant)
@@ -306,10 +313,12 @@ actor SpatialPhotoService {
     func croppedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String = "v",
-        style: RestorationStyle? = nil
+        style: RestorationStyle? = nil,
+        deep: Bool = false,
+        debugMask: Bool = false
     ) async throws -> (left: PlatformImage, right: PlatformImage) {
         let (leftFinal, rightFinal) = try await preparedStereoPair(
-            for: card, quality: quality, style: style
+            for: card, quality: quality, style: style, deep: deep, debugMask: debugMask
         )
 
         #if canImport(UIKit)
@@ -363,7 +372,9 @@ actor SpatialPhotoService {
     private func preparedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String,
-        style: RestorationStyle? = nil
+        style: RestorationStyle? = nil,
+        deep: Bool = true,
+        debugMask: Bool = false
     ) async throws -> (left: CGImage, right: CGImage) {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
@@ -438,8 +449,30 @@ actor SpatialPhotoService {
             )
         }
 
-        // 5. Resize to matching dimensions (required for spatial photos)
-        return matchDimensions(left: leftCGImage, right: rightCGImage)
+        // 5. Resize to matching dimensions (required for spatial photos, and a
+        // prerequisite for optical-flow defect removal below).
+        var (leftFinal, rightFinal) = matchDimensions(
+            left: leftCGImage, right: rightCGImage
+        )
+
+        // 6. Stereo-aware dust/scratch removal, deep path only. Cheap when the
+        // pair is clean (it short-circuits before the expensive optical flow if
+        // nothing is flagged), so it's safe to run on every deep render.
+        if debugMask {
+            // Detector visualization for tuning — paints the flagged mask
+            // instead of removing anything.
+            return stereoProcessor.debugMaskOverlay(left: leftFinal, right: rightFinal)
+        }
+        if deep {
+            // Stereo-aware defect removal + blown-highlight recovery, sharing one
+            // optical-flow computation. Short-circuits before the flow when the
+            // pair is clean.
+            (leftFinal, rightFinal) = stereoProcessor.process(
+                left: leftFinal, right: rightFinal
+            )
+        }
+
+        return (leftFinal, rightFinal)
     }
 
     // MARK: - Image Cropping

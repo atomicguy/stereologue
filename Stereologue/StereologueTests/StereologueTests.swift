@@ -12,51 +12,24 @@ import CoreGraphics
 
 struct StereologueTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-    }
-
-    @Test func scuNetModelLoadsFromBundle() throws {
-        #expect(SCUNetModel.shared != nil)
-    }
-
-    @Test func scuNetDenoiserProducesSameSizedImage() throws {
-        let model = try #require(SCUNetModel.shared)
+    @Test func restorePreservesDimensionsForEveryStyle() throws {
         let input = try #require(Self.makeTestImage(width: 96, height: 64))
+        let pipeline = RestorationPipeline()
 
-        let output = SCUNetDenoiser(model: model).apply(to: input)
-
-        #expect(output.width == input.width)
-        #expect(output.height == input.height)
-        #expect(!Self.isUniform(output), "denoised output should not collapse to a single flat color")
+        for style in RestorationStyle.allCases {
+            let output = pipeline.restore(input, style: style)
+            #expect(output.width == input.width, "\(style) changed width")
+            #expect(output.height == input.height, "\(style) changed height")
+            #expect(!Self.isUniform(output), "\(style) collapsed to a flat color")
+        }
     }
 
-    /// Multi-tile input (900x700 needs several 512x512 tiles with overlap),
-    /// called directly and synchronously. Tiles now run strictly one at a
-    /// time through SCUNetModel.predictionQueue, so this is expected to take
-    /// tens of seconds, not be fast — the time limit exists only to catch a
-    /// genuine hang, not to enforce speed.
-    @Test(.timeLimit(.minutes(5)))
-    func scuNetDenoiserMultiTileDirect() throws {
-        let model = try #require(SCUNetModel.shared)
-        let input = try #require(Self.makeTestImage(width: 900, height: 700))
-
-        let output = SCUNetDenoiser(model: model).apply(to: input)
-
-        #expect(output.width == input.width)
-        #expect(output.height == input.height)
-    }
-
-    /// Exactly mirrors the real call site (SpatialPhotoService's
-    /// preparedStereoPair): two multi-tile restores kicked off with
-    /// `async let` through RestorationPipeline.restore() itself. Both eyes
-    /// now serialize behind the same SCUNetModel.predictionQueue, so this
-    /// is expected to take roughly as long as the direct test above, twice
-    /// over — not fast, just not hung.
-    @Test(.timeLimit(.minutes(8)))
-    func scuNetDenoiserConcurrentEyesLikeRealCallSite() async throws {
-        let left = try #require(Self.makeTestImage(width: 900, height: 700))
-        let right = try #require(Self.makeTestImage(width: 900, height: 700))
+    /// Mirrors the real call site (SpatialPhotoService's preparedStereoPair):
+    /// the two eyes restored concurrently through `async let` on the shared,
+    /// Sendable pipeline.
+    @Test func restoreRunsConcurrentlyForBothEyes() async throws {
+        let left = try #require(Self.makeTestImage(width: 300, height: 200))
+        let right = try #require(Self.makeTestImage(width: 300, height: 200))
         let pipeline = RestorationPipeline()
 
         async let leftOut = pipeline.restore(left, style: .enhance)
@@ -67,7 +40,27 @@ struct StereologueTests {
         #expect(r.width == right.width)
     }
 
-    /// A synthetic noisy gradient — enough structure that a denoiser
+    @Test func matchPairLeavesBalancedPairUntouched() throws {
+        let image = try #require(Self.makeTestImage(width: 64, height: 64))
+        let pipeline = RestorationPipeline()
+
+        let matched = pipeline.matchPair(left: image, right: image)
+
+        // Identical eyes are already balanced; the pipeline should short-circuit
+        // and hand back the very same images rather than re-rendering them.
+        #expect(matched.left === image)
+        #expect(matched.right === image)
+    }
+
+    @Test func parseYearReadsLeadingFourDigits() {
+        #expect(StereoCard.parseYear(from: "1871-08") == 1871)
+        #expect(StereoCard.parseYear(from: "1850") == 1850)
+        #expect(StereoCard.parseYear(from: "ca. 1900") == nil)
+        #expect(StereoCard.parseYear(from: "18") == nil)
+        #expect(StereoCard.parseYear(from: nil) == nil)
+    }
+
+    /// A synthetic noisy gradient — enough structure that a restoration
     /// producing a degenerate (blank/uniform) output is visibly wrong.
     private static func makeTestImage(width: Int, height: Int) -> CGImage? {
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
@@ -108,5 +101,4 @@ struct StereologueTests {
         let first = pixels[0]
         return pixels.allSatisfy { $0 == first }
     }
-
 }
