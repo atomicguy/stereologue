@@ -17,6 +17,14 @@ invalidation is done by keying on crop geometry rather than by calling
 `evict`, which keeps `UserDataService` decoupled from the photo service.
 Remaining: measure the done-when numbers on hardware.
 
+Follow-up: the "deep" pass (`StereoPairProcessor`) was subsequently removed
+outright rather than kept opt-in. Its detector missed most real scratches at
+scan resolution and general-purpose optical flow was unreliable across stereo
+disparity, so the visible effect was negligible for its cost. The
+`deep`/debug-mask plumbing is gone from the renderer, service, and both
+viewers; the code is recoverable from git history and its sibling-fill idea
+seeds Phase 3.
+
 Goal: picking a restoration style in the spatial viewer returns in seconds and
 never blocks navigation. No new algorithms; this is defaults, scheduling, and
 cancellation.
@@ -92,6 +100,9 @@ faults during a scroll of 500 rows; hitch rate < 1% at 120 Hz on iPad Pro.
 
 ## Phase 3 — Restoration quality track (ongoing, start after Phase 1)
 
+There is currently no defect-repair stage in the app. This phase builds one
+from measurement up.
+
 Principle: **the second eye is the reference.** Any step that generates pixels
 must be applied with the same mask to both eyes or verified against the
 sibling, so nothing ends up in one eye that isn't in the other. No whole-image
@@ -108,22 +119,30 @@ stereo fusion.
    committed output so regressions are visible.
 2. **Resolution tiers (1 day).**
    Preview tier: crop → downscale to ≤ 1024 px per eye → tone → rectify. This
-   is what the viewers show by default and what prefetch uses. Deep tier: full
-   resolution, plus defect/highlight repair, on explicit request only.
-   Optical flow and rectification registration run on ≤ 640 px copies; the
-   flow field / transform is upsampled and applied at full size.
+   is what the viewers show by default and what prefetch uses. Full tier: full
+   resolution, plus defect repair once it exists, on explicit request only.
+   Rectification registration (and any future disparity matching) runs on
+   ≤ 640 px copies; the transform / field is upsampled and applied at full
+   size.
 3. **Learned scratch detector (2–3 days, spike first).**
    Convert only the scratch-detection U-Net from *Bringing Old Photos Back to
    Life* (MIT-licensed code and checkpoints) to Core ML via coremltools; fp16,
    fixed 512 px input, run on a downscaled eye and upsample the mask. Compare
-   against the current morphological top-hat detector on the eval set. Keep
-   whichever wins per defect class; the sibling-fill stage is unchanged either
-   way. Spike exit criteria: converts, runs on Vision Pro in < 1 s per eye,
-   catches ≥ the morphological detector's true positives with fewer false
-   positives on texture.
+   against a multi-scale morphological top-hat baseline on the eval set (the
+   removed single-radius detector is the floor, not the baseline). Spike exit
+   criteria: converts, runs on Vision Pro in < 1 s per eye, and its masks
+   cover the scratches a human marks on the eval set with few false positives
+   on texture. Ship the detector only together with a fill (3.4).
+3b. **Disparity-aware sibling fill (2 days).**
+   Reinstate the sibling-fill idea from the removed `StereoPairProcessor`,
+   but replace general optical flow with matching constrained to the epipolar
+   line after rectification: for each masked pixel, block-match horizontally
+   in the other eye within the card's disparity range, accept on a
+   left-right consistency check, and fill; feather the result. Highlight
+   recovery uses the same match.
 4. **Fallback inpainting (2–3 days, macOS first).**
-   For pixels the sibling can't resolve (flow disagreement or both eyes
-   damaged), replace the 8-neighbour iterative fill with LaMa via Core ML
+   For pixels the sibling can't resolve (match rejected or both eyes
+   damaged), use LaMa via Core ML
    (see `mallman/CoreMLaMa`). Mask-conditioned only. Apply with the *union*
    mask to both eyes so the fill is stereo-consistent. Validate on macOS;
    iPad and Vision Pro need ANE/fp16 tuning and may stay on the classical
@@ -157,8 +176,8 @@ Debug and Release, on Vision Pro.
 - Optical flow sampling / inpaint loops: `withUnsafeMutableBufferPointer` +
   SIMD, and `DispatchQueue.concurrentPerform` over row bands.
 
-Order by profile: run the deep tier on the eval set under Instruments,
-convert the top three time sinks first, re-profile.
+Order by profile: run every style at full resolution on the eval set under
+Instruments, convert the top three time sinks first, re-profile.
 
 ---
 
@@ -190,8 +209,8 @@ convert the top three time sinks first, re-profile.
 | 3 | Phase 3.1–3.2 | Eval set and tiers make every later restoration change measurable |
 | 4 | Phase 5 | Cheap, and the test scaffolding helps 3 and 4 |
 | 5 | Phase 3.3 | Detector spike; decide go/no-go on the learned mask |
-| 6 | Phase 4 | Only matters once the deep tier is opt-in and measured |
-| 7 | Phase 3.4–3.6 | Inpainting fallback and optional passes |
+| 6 | Phase 4 | Only matters once the eval set exists to measure against |
+| 7 | Phase 3.3b–3.6 | Sibling fill, inpainting fallback, optional passes |
 
 ## Out of scope for this revision
 

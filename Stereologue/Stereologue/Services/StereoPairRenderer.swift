@@ -3,7 +3,7 @@
 //  Stereologue
 //
 //  Pure stereo-pair rendering: download → crop → restore → rectify →
-//  dimension-match → (deep) defect repair → spatial HEIC encode.
+//  dimension-match → spatial HEIC encode.
 //
 //  Holds no caches and does no coalescing — that is `SpatialPhotoService`'s
 //  job. Every async entry point is `@concurrent`, so the work always runs on
@@ -150,9 +150,6 @@ nonisolated struct StereoPairRenderer: Sendable {
     /// Tone and contrast restoration for scanned prints.
     private let restorationPipeline = RestorationPipeline()
 
-    /// Stereo-aware defect removal + highlight recovery (deep path only).
-    private let stereoProcessor = StereoPairProcessor()
-
     // MARK: - Stereoview Camera Defaults
 
     /// Baseline (interaxial distance) in meters.
@@ -183,11 +180,10 @@ nonisolated struct StereoPairRenderer: Sendable {
         for card: SpatialPhotoCardData,
         quality: String,
         style: RestorationStyle?,
-        deep: Bool,
         metadata: SpatialPhotoMetadata? = nil
     ) async throws -> Data {
         let (left, right) = try await preparedStereoPair(
-            for: card, quality: quality, style: style, deep: deep
+            for: card, quality: quality, style: style
         )
         try Task.checkCancellation()
         return try makeSpatialHEICData(
@@ -202,9 +198,7 @@ nonisolated struct StereoPairRenderer: Sendable {
     func preparedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String,
-        style: RestorationStyle? = nil,
-        deep: Bool = false,
-        debugMask: Bool = false
+        style: RestorationStyle? = nil
     ) async throws -> (left: CGImage, right: CGImage) {
         guard let sourceURL = card.frontImageURL(quality: quality) else {
             throw SpatialPhotoError.noFrontImage
@@ -217,7 +211,7 @@ nonisolated struct StereoPairRenderer: Sendable {
         let leftDetection = card.leftDetection
         let rightDetection = card.rightDetection
 
-        logger.info("Preparing stereo pair for \(card.uuid) (deep: \(deep))")
+        logger.info("Preparing stereo pair for \(card.uuid)")
 
         // 1. Download source image via Nuke (benefits from its disk cache).
         //    Nuke's async API cancels the download with the task.
@@ -286,28 +280,8 @@ nonisolated struct StereoPairRenderer: Sendable {
         }
         try Task.checkCancellation()
 
-        // 5. Resize to matching dimensions (required for spatial photos, and a
-        // prerequisite for optical-flow defect removal below).
-        var (leftFinal, rightFinal) = matchDimensions(
-            left: leftCGImage, right: rightCGImage
-        )
-
-        // 6. Stereo-aware dust/scratch removal + blown-highlight recovery,
-        // deep path only. Shares one optical-flow computation and
-        // short-circuits before the flow when the pair is clean.
-        if debugMask {
-            // Detector visualization for tuning — paints the flagged mask
-            // instead of removing anything.
-            return stereoProcessor.debugMaskOverlay(left: leftFinal, right: rightFinal)
-        }
-        if deep {
-            (leftFinal, rightFinal) = stereoProcessor.process(
-                left: leftFinal, right: rightFinal
-            )
-            try Task.checkCancellation()
-        }
-
-        return (leftFinal, rightFinal)
+        // 5. Resize to matching dimensions (required for spatial photos).
+        return matchDimensions(left: leftCGImage, right: rightCGImage)
     }
 
     // MARK: - Image Cropping

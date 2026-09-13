@@ -68,14 +68,6 @@ private final class DeviceMotionManager {
 }
 #endif
 
-/// A restoration result is identified by both its tonal style and whether the
-/// slower stereo-aware defect/highlight repair pass was applied, so the fast
-/// preview and the "deep" render are cached and displayed independently.
-private struct RestorationVariant: Hashable {
-    let style: RestorationStyle
-    let deep: Bool
-}
-
 struct WiggleStereoView: View {
     let card: StereoCard
     let cropOverride: UserCropOverride?
@@ -85,12 +77,7 @@ struct WiggleStereoView: View {
 
     @State private var baseLeftImage: Image?
     @State private var baseRightImage: Image?
-    @State private var restoredImages: [RestorationVariant: (left: Image, right: Image)] = [:]
-    @State private var deepRestore = false
-    #if DEBUG
-    @State private var showDefectMask = false
-    @State private var debugMaskPair: (left: Image, right: Image)?
-    #endif
+    @State private var restoredImages: [RestorationStyle: (left: Image, right: Image)] = [:]
 
     @State private var showingLeft = true
     @State private var isLoading = true
@@ -106,27 +93,13 @@ struct WiggleStereoView: View {
     @State private var motionManager = DeviceMotionManager()
     #endif
 
-    private var leftImage: Image? {
-        #if DEBUG
-        if showDefectMask, let debug = debugMaskPair { return debug.left }
-        #endif
-        return restoredPair?.left ?? baseLeftImage
-    }
+    private var leftImage: Image? { restoredPair?.left ?? baseLeftImage }
+    private var rightImage: Image? { restoredPair?.right ?? baseRightImage }
 
-    private var rightImage: Image? {
-        #if DEBUG
-        if showDefectMask, let debug = debugMaskPair { return debug.right }
-        #endif
-        return restoredPair?.right ?? baseRightImage
-    }
-
-    /// The restored pair to display for the current style/depth. While a newly
-    /// requested depth is still rendering, falls back to the other depth of the
-    /// same style so the view doesn't flash back to the unrestored original.
+    /// The restored pair for the current style, once rendered.
     private var restoredPair: (left: Image, right: Image)? {
         guard let style = currentStyle else { return nil }
-        return restoredImages[RestorationVariant(style: style, deep: deepRestore)]
-            ?? restoredImages[RestorationVariant(style: style, deep: !deepRestore)]
+        return restoredImages[style]
     }
 
     var body: some View {
@@ -336,27 +309,6 @@ struct WiggleStereoView: View {
                         Text(style.displayName).tag(RestorationStyle?.some(style))
                     }
                 }
-
-                Divider()
-
-                Toggle(isOn: Binding(
-                    get: { deepRestore },
-                    set: { setDeepRestore($0) }
-                )) {
-                    Label("Deep Restore (slower)", systemImage: "sparkles")
-                }
-                .disabled(currentStyle == nil)
-
-                #if DEBUG
-                Divider()
-
-                Toggle(isOn: Binding(
-                    get: { showDefectMask },
-                    set: { setShowDefectMask($0) }
-                )) {
-                    Label("Show Defect Mask", systemImage: "ant")
-                }
-                #endif
             } label: {
                 Image(systemName: currentStyle != nil ? "wand.and.stars" : "wand.and.stars.inverse")
                     .font(.title2)
@@ -388,53 +340,12 @@ struct WiggleStereoView: View {
 
     private func selectStyle(_ style: RestorationStyle?) {
         currentStyle = style
-        ensureCurrentVariantLoaded()
-    }
-
-    private func setDeepRestore(_ deep: Bool) {
-        deepRestore = deep
-        ensureCurrentVariantLoaded()
-    }
-
-    #if DEBUG
-    private func setShowDefectMask(_ on: Bool) {
-        showDefectMask = on
-        if on, debugMaskPair == nil {
-            Task { await loadDebugMask() }
+        if let style, restoredImages[style] == nil {
+            Task { await loadRestoration(style: style) }
         }
     }
 
-    private func loadDebugMask() async {
-        guard let service = spatialPhotoService else { return }
-        let cardData = card.spatialPhotoData(cropOverride: cropOverride)
-
-        isRestoring = true
-        do {
-            let pair = try await service.croppedStereoPair(
-                for: cardData, style: currentStyle, debugMask: true
-            )
-            debugMaskPair = (
-                Image(platformImage: pair.left),
-                Image(platformImage: pair.right)
-            )
-        } catch {
-            restorationError = error.localizedDescription
-            showDefectMask = false
-        }
-        isRestoring = false
-    }
-    #endif
-
-    /// Kicks off a render for the current style/depth if it isn't cached yet.
-    private func ensureCurrentVariantLoaded() {
-        guard let style = currentStyle else { return }
-        let variant = RestorationVariant(style: style, deep: deepRestore)
-        if restoredImages[variant] == nil {
-            Task { await loadRestoration(variant) }
-        }
-    }
-
-    private func loadRestoration(_ variant: RestorationVariant) async {
+    private func loadRestoration(style: RestorationStyle) async {
         guard let service = spatialPhotoService else { return }
         let cardData = card.spatialPhotoData(cropOverride: cropOverride)
 
@@ -442,16 +353,15 @@ struct WiggleStereoView: View {
         do {
             let pair = try await service.croppedStereoPair(
                 for: cardData,
-                style: variant.style,
-                deep: variant.deep
+                style: style
             )
-            restoredImages[variant] = (
+            restoredImages[style] = (
                 Image(platformImage: pair.left),
                 Image(platformImage: pair.right)
             )
         } catch {
             restorationError = error.localizedDescription
-            if currentStyle == variant.style {
+            if currentStyle == style {
                 currentStyle = nil
             }
         }

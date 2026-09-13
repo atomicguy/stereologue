@@ -150,25 +150,24 @@ func applyToneCurve(_ image: CIImage) -> CIImage {
 
 ---
 
-## Stage 3 — Dust & Scratch Repair (stereo-aware)
+## Stage 3 — Dust & Scratch Repair (not shipped)
 
-Single-image ML denoisers were tried here (SCUNet, tiled at 512×512 through
-Core ML) and removed: on visionOS the tiled inference was too slow to be
-interactive, and the results on scanned albumen/silver-gelatin prints were
-not reliably better than the input.
+There is currently **no** defect-repair stage. Two approaches were tried and
+removed:
 
-The current approach exploits the stereo pair instead. A blemish on one
-print almost never lands on the same scene point of the other print, so
-`StereoPairProcessor` detects defects (morphological top-hat/bottom-hat),
-computes dense optical flow between the eyes (`VNGenerateOpticalFlowRequest`),
-and fills each defect from the disparity-corresponding pixels of the sibling
-eye, falling back to neighborhood inpainting where the flow disagrees. Blown
-highlights are recovered the same way. This runs only on the deliberate
-"deep" path.
+- **SCUNet** (single-image denoiser, tiled 512×512 through Core ML): too slow
+  to be interactive on visionOS, and results on scanned prints were not
+  reliably better than the input.
+- **Stereo-aware sibling fill** (`StereoPairProcessor`, removed on the
+  `fall-2026-revision` branch — recoverable from git history): detected
+  defects with a fixed-radius morphological top-hat and filled them from the
+  other eye via Vision optical flow. The detector missed most real scratches
+  at scan resolution, and general-purpose optical flow is unreliable across
+  stereo disparity, so the visible effect was negligible for its cost.
 
-A learned scratch *detector* (e.g. the U-Net from *Bringing Old Photos Back
-to Life*) would slot in as a drop-in replacement for the morphological
-detector; the fill stage is unchanged.
+The replacement track is `PLAN-fall-2026.md`, Phase 3: an evaluation set
+first, then a learned scratch *detector*, a disparity-aware sibling fill, and
+a mask-conditioned inpainting fallback applied identically to both eyes.
 
 ---
 

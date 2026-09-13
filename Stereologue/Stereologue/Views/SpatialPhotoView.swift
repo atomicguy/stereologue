@@ -34,10 +34,6 @@ struct SpatialPhotoView: View {
     @State private var isLoading = false
     @State private var isRestoring = false
     @State private var currentStyle: RestorationStyle?
-    /// Whether the slow stereo-aware defect/highlight repair runs. Off by
-    /// default and only ever turned on by the user for the card in view;
-    /// prefetch never uses it.
-    @State private var deepRestore = false
     @State private var displayedCardUUID: String?
     @State private var useFadeTransition = false
     @State private var isFavorite = false
@@ -51,7 +47,7 @@ struct SpatialPhotoView: View {
                 // Spatial photo with push transition
                 if let spatialPhotoData {
                     spatialPhotoContent(data: spatialPhotoData, geometry: geometry)
-                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")_\(deepRestore)")
+                        .id("\(displayedCardUUID ?? "")_\(currentStyle?.rawValue ?? "none")")
                         .transition(photoTransition)
                 } else if isLoading {
                     ProgressView()
@@ -316,22 +312,13 @@ struct SpatialPhotoView: View {
                     Picker("Restoration", selection: Binding(
                         get: { currentStyle },
                         set: { newStyle in
-                            applyVariant(style: newStyle, deep: deepRestore)
+                            applyStyle(newStyle)
                         }
                     )) {
                         Text("Original").tag(RestorationStyle?.none)
                         ForEach(RestorationStyle.allCases) { style in
                             Text(style.displayName).tag(RestorationStyle?.some(style))
                         }
-                    }
-
-                    Divider()
-
-                    Toggle(isOn: Binding(
-                        get: { deepRestore },
-                        set: { applyVariant(style: currentStyle, deep: $0) }
-                    )) {
-                        Label("Deep Restore (slower)", systemImage: "sparkles")
                     }
                 } label: {
                     Image(systemName: currentStyle != nil ? "wand.and.stars" : "wand.and.stars.inverse")
@@ -402,7 +389,7 @@ struct SpatialPhotoView: View {
 
         do {
             let data = try await spatialPhotoService.spatialHEICData(
-                for: cardData, style: currentStyle, deep: deepRestore
+                for: cardData, style: currentStyle
             )
             withAnimation(.easeInOut(duration: 0.35)) {
                 spatialPhotoData = data
@@ -419,10 +406,10 @@ struct SpatialPhotoView: View {
         isLoading = false
     }
 
-    /// Renders the current card with the requested style/depth. The previous
+    /// Renders the current card with the requested style. The previous
     /// in-progress render (if any) is cancelled first, so rapid menu changes
     /// don't pile up.
-    private func applyVariant(style: RestorationStyle?, deep: Bool) {
+    private func applyStyle(_ style: RestorationStyle?) {
         guard let card = viewModel.currentCard,
               card.hasStereoDetections else { return }
         let cardData = cardData(for: card)
@@ -434,14 +421,13 @@ struct SpatialPhotoView: View {
             defer { isRestoring = false }
             do {
                 let data = try await spatialPhotoService.spatialHEICData(
-                    for: cardData, style: style, deep: deep
+                    for: cardData, style: style
                 )
                 useFadeTransition = true
                 withAnimation(.easeInOut(duration: 0.35)) {
                     spatialPhotoData = data
                     displayedCardUUID = cardUUID
                     currentStyle = style
-                    deepRestore = deep
                 }
             } catch is CancellationError {
                 // User cancelled or changed their mind; keep what's showing.
@@ -452,7 +438,7 @@ struct SpatialPhotoView: View {
         }
     }
 
-    /// Warms the neighbors at the current style, never deep.
+    /// Warms the neighbors at the current style.
     private func prefetchAdjacent() {
         guard let idx = viewModel.currentIndex else { return }
         var adjacent: [SpatialPhotoCardData] = []

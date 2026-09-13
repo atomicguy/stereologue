@@ -7,7 +7,7 @@
 //  The actor owns only cheap state: the in-memory HEIC cache, the on-disk
 //  share directory, and the map of in-flight renders. The rendering itself
 //  runs off-actor (`StereoPairRenderer` is `@concurrent`), so a cache hit or
-//  a new request for card B is never queued behind a slow deep render of
+//  a new request for card B is never queued behind a slow render of
 //  card A. Waiters are counted per variant; when the last one cancels, the
 //  render is cancelled too.
 //
@@ -75,17 +75,15 @@ actor SpatialPhotoService {
     // MARK: - Cache Keys
 
     /// Cache/coalescing key for one rendered variant. Every input that changes
-    /// the pixels is part of it: source quality, effective crop, restoration
-    /// style, and whether the deep repair pass ran.
+    /// the pixels is part of it: source quality, effective crop, and
+    /// restoration style.
     nonisolated static func variantKey(
         for card: SpatialPhotoCardData,
         quality: String,
-        style: RestorationStyle?,
-        deep: Bool
+        style: RestorationStyle?
     ) -> String {
         var key = "\(card.uuid)_\(quality)_\(card.cropKey)"
         if let style { key += "_\(style.rawValue)" }
-        if deep { key += "_deep" }
         return key
     }
 
@@ -104,18 +102,15 @@ actor SpatialPhotoService {
     ///     `card.spatialPhotoData(cropOverride:)` on MainActor.
     ///   - quality: IIIF quality code for the source image (default "v" = 2560px).
     ///   - style: Tone restoration to apply, or `nil` for the original.
-    ///   - deep: Also run the slow stereo-aware defect/highlight repair. Off by
-    ///     default; only explicit user actions should turn it on.
     ///   - priority: Priority of a render started by this call. Coalesced
     ///     callers escalate an existing render automatically.
     func spatialHEICData(
         for card: SpatialPhotoCardData,
         quality: String = "v",
         style: RestorationStyle? = nil,
-        deep: Bool = false,
         priority: TaskPriority = .userInitiated
     ) async throws -> Data {
-        let variant = Self.variantKey(for: card, quality: quality, style: style, deep: deep)
+        let variant = Self.variantKey(for: card, quality: quality, style: style)
 
         if let cached = dataCache[variant] {
             logger.debug("Cache hit for spatial photo: \(variant)")
@@ -137,7 +132,7 @@ actor SpatialPhotoService {
                     }
                 }
                 let data = try await renderer.spatialHEICData(
-                    for: card, quality: quality, style: style, deep: deep
+                    for: card, quality: quality, style: style
                 )
                 cacheData(data, for: variant)
                 logger.info("Spatial photo generated in memory: \(variant)")
@@ -160,9 +155,7 @@ actor SpatialPhotoService {
     }
 
     /// Prefetches spatial photos for the given cards at low priority.
-    ///
-    /// Never runs the deep pass — that is reserved for explicit user actions
-    /// on the card being viewed. Failures are logged but not thrown.
+    /// Failures are logged but not thrown.
     func prefetch(
         cards: [SpatialPhotoCardData],
         quality: String = "v",
@@ -174,7 +167,7 @@ actor SpatialPhotoService {
                 do {
                     _ = try await spatialHEICData(
                         for: card, quality: quality, style: style,
-                        deep: false, priority: .utility
+                        priority: .utility
                     )
                 } catch is CancellationError {
                 } catch {
@@ -201,7 +194,7 @@ actor SpatialPhotoService {
         try? FileManager.default.removeItem(at: outputURL)
 
         let data = try await renderer.spatialHEICData(
-            for: card, quality: quality, style: nil, deep: false, metadata: metadata
+            for: card, quality: quality, style: nil, metadata: metadata
         )
         try data.write(to: outputURL)
         return outputURL
@@ -214,12 +207,10 @@ actor SpatialPhotoService {
     func croppedStereoPair(
         for card: SpatialPhotoCardData,
         quality: String = "v",
-        style: RestorationStyle? = nil,
-        deep: Bool = false,
-        debugMask: Bool = false
+        style: RestorationStyle? = nil
     ) async throws -> (left: PlatformImage, right: PlatformImage) {
         let (leftFinal, rightFinal) = try await renderer.preparedStereoPair(
-            for: card, quality: quality, style: style, deep: deep, debugMask: debugMask
+            for: card, quality: quality, style: style
         )
 
         #if canImport(UIKit)

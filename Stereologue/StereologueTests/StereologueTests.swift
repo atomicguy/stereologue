@@ -59,23 +59,22 @@ struct StereologueTests {
             rightDetection: ImageDetection(x: 500, y: 200, width: 300, height: 400),
             imageWidth: 1000, imageHeight: 500
         )
-        let original = SpatialPhotoService.variantKey(for: base, quality: "v", style: nil, deep: false)
-        let styled = SpatialPhotoService.variantKey(for: base, quality: "v", style: .enhance, deep: false)
-        let deep = SpatialPhotoService.variantKey(for: base, quality: "v", style: .enhance, deep: true)
-        let lowRes = SpatialPhotoService.variantKey(for: base, quality: "w", style: nil, deep: false)
+        let original = SpatialPhotoService.variantKey(for: base, quality: "v", style: nil)
+        let styled = SpatialPhotoService.variantKey(for: base, quality: "v", style: .enhance)
+        let otherStyle = SpatialPhotoService.variantKey(for: base, quality: "v", style: .preserveTone)
+        let lowRes = SpatialPhotoService.variantKey(for: base, quality: "w", style: nil)
 
         // A user crop edit must never hit the old crop's cache entry.
-        var recropped = base
-        recropped = SpatialPhotoCardData(
+        let recropped = SpatialPhotoCardData(
             uuid: base.uuid, frontImageID: base.frontImageID,
             leftDetection: ImageDetection(x: 110, y: 200, width: 300, height: 400),
             rightDetection: base.rightDetection,
             imageWidth: base.imageWidth, imageHeight: base.imageHeight
         )
-        let recroppedKey = SpatialPhotoService.variantKey(for: recropped, quality: "v", style: nil, deep: false)
+        let recroppedKey = SpatialPhotoService.variantKey(for: recropped, quality: "v", style: nil)
 
-        #expect(Set([original, styled, deep, lowRes, recroppedKey]).count == 5)
-        #expect(original == SpatialPhotoService.variantKey(for: base, quality: "v", style: nil, deep: false))
+        #expect(Set([original, styled, otherStyle, lowRes, recroppedKey]).count == 5)
+        #expect(original == SpatialPhotoService.variantKey(for: base, quality: "v", style: nil))
         #expect(original.hasPrefix("abc_"), "evict(cardUUID:) relies on the uuid prefix")
     }
 

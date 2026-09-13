@@ -70,9 +70,8 @@ nonisolated final class RestorationPipeline: @unchecked Sendable {
 
     /// Applies tone/contrast restoration for the given style.
     ///
-    /// Tone-only: dust/scratch repair is handled separately by
-    /// `StereoPairProcessor`, which uses the other eye of the pair as
-    /// reference rather than a single-image denoiser.
+    /// Tone-only. Dust/scratch repair is a separate, not-yet-shipped track
+    /// (see PLAN-fall-2026.md, Phase 3).
     func restore(
         _ cgImage: CGImage,
         style: RestorationStyle = .enhance
