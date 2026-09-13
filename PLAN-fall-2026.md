@@ -163,7 +163,22 @@ stereo fusion.
    criteria: converts, runs on Vision Pro in < 1 s per eye, and its masks
    cover the scratches a human marks on the eval set with few false positives
    on texture. Ship the detector only together with a fill (3.4).
-3b. **Disparity-aware sibling fill (2 days).**
+3b. **Disparity-aware sibling fill (2 days).** — 🔬 disparity + residual prototype shipped
+   `StereoResidual` (Services) does winner-takes-all block matching along
+   rectified rows at ≤ 512 px with a left-right check, fills unmatched
+   disparities from the smooth field of matched neighbours, warps the other
+   eye in, normalizes local exposure, and reports a contrast-normalized
+   best-of-±1-px residual with occlusion (disparity-gradient) and
+   unknown-region suppression. ~250 ms per pair on this Mac in Release. The
+   Restoration Eval tool shows Disparity and Stereo residual overlays with a
+   threshold slider. Findings on the eval cards: 45–65 % of pixels match on
+   textured prints, ~25 % on sky/water prints; at threshold 1.0 the residual
+   flags 0.05–1.5 % of a textured card and ~3 % of a hard one; remaining
+   false positives are stereo occlusions on deep scenes and matching
+   failures on flat or repetitive areas. The global shift can still be wrong
+   on low-texture cards. Next: judge the flagged pixels by eye in the tool,
+   then either semi-global matching or a learned stereo model for disparity,
+   before building the fill on top.
    Reinstate the sibling-fill idea from the removed `StereoPairProcessor`,
    but replace general optical flow with matching constrained to the epipolar
    line after rectification: for each masked pixel, block-match horizontally

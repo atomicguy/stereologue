@@ -133,6 +133,95 @@ nonisolated struct PixelPlanes {
 /// Small vDSP/vImage/vForce wrappers used by the restoration kernels.
 nonisolated enum Vec {
 
+    // MARK: CGImage bridging
+
+    /// Reads a CGImage as interleaved sRGB RGBA8.
+    static func rgba(of image: CGImage) -> [UInt8]? {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: &pixels, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixels
+    }
+
+    /// Wraps interleaved RGBA8 bytes as an sRGB CGImage.
+    static func rgbaImage(_ pixels: [UInt8], width: Int, height: Int) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(
+            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: space,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent
+        )
+    }
+
+    static func planes(of image: CGImage) -> PixelPlanes? {
+        guard let bytes = rgba(of: image) else { return nil }
+        return PixelPlanes(rgba: bytes, width: image.width, height: image.height)
+    }
+
+    /// Resamples an image by `factor` (< 1) with high-quality interpolation.
+    static func downscaled(_ image: CGImage, by factor: Double) -> CGImage? {
+        let width = max(1, Int((Double(image.width) * factor).rounded()))
+        let height = max(1, Int((Double(image.height) * factor).rounded()))
+        guard let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
+    /// Box blur of a plane with a (2r+1)² window, edges replicated. Two
+    /// sliding-window sums (rows, then columns with a stride), so cost is
+    /// independent of the radius.
+    static func boxBlur(_ src: [Float], into dst: inout [Float], width: Int, height: Int, radius: Int) {
+        let r = radius
+        guard r > 0, width > 0, height > 0 else { dst = src; return }
+        let k = 2 * r + 1
+        let pw = width + 2 * r, ph = height + 2 * r
+        var padded = [Float](repeating: 0, count: pw * ph)
+        src.withUnsafeBufferPointer { sp in
+            padded.withUnsafeMutableBufferPointer { pp in
+                for y in 0..<ph {
+                    let sy = min(height - 1, max(0, y - r))
+                    let srcRow = sp.baseAddress! + sy * width
+                    let dstRow = pp.baseAddress! + y * pw
+                    dstRow.advanced(by: r).update(from: srcRow, count: width)
+                    var left = srcRow.pointee, right = srcRow[width - 1]
+                    vDSP_vfill(&left, dstRow, 1, vDSP_Length(r))
+                    vDSP_vfill(&right, dstRow.advanced(by: r + width), 1, vDSP_Length(r))
+                }
+            }
+        }
+        var temp = [Float](repeating: 0, count: width * ph)
+        padded.withUnsafeBufferPointer { pp in
+            temp.withUnsafeMutableBufferPointer { tp in
+                for y in 0..<ph {
+                    vDSP_vswsum(pp.baseAddress! + y * pw, 1, tp.baseAddress! + y * width, 1, vDSP_Length(width), vDSP_Length(k))
+                }
+            }
+        }
+        temp.withUnsafeBufferPointer { tp in
+            dst.withUnsafeMutableBufferPointer { dp in
+                for x in 0..<width {
+                    vDSP_vswsum(tp.baseAddress! + x, width, dp.baseAddress! + x, width, vDSP_Length(height), vDSP_Length(k))
+                }
+            }
+        }
+        var scale = 1 / Float(k * k)
+        vDSP_vsmul(dst, 1, &scale, &dst, 1, vDSP_Length(width * height))
+    }
+
     /// Bytes → 0…1 floats.
     static func toFloat(_ bytes: [UInt8]) -> [Float] {
         let n = vDSP_Length(bytes.count)

@@ -45,6 +45,19 @@ struct RestorationEvalView: View {
     @State private var maskedPair: (left: CGImage, right: CGImage)?
     @State private var maskStats: String?
 
+    // Stereo residual experiment (Phase 3.3b): block-matching disparity and
+    // the residual after warping the other eye into this one.
+    enum Overlay: String, CaseIterable, Identifiable {
+        case none = "None", scratch = "Scratch mask", disparity = "Disparity", residual = "Stereo residual"
+        var id: String { rawValue }
+    }
+    @State private var overlay: Overlay = .none
+    @State private var residualThreshold: Float = 0.12
+    @State private var stereo: StereoResidual.Result?
+    @State private var stereoPair: (left: CGImage, right: CGImage)?
+    @State private var stereoStatus: String?
+    @State private var stereoTask: Task<Void, Never>?
+
     private static let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "RestorationEval")
 
     var body: some View {
@@ -130,24 +143,42 @@ struct RestorationEvalView: View {
                 .toggleStyle(.switch)
         }
         HStack {
-            Toggle("Scratch mask", isOn: $showScratchMask)
-                .toggleStyle(.switch)
-                .disabled(detector == nil)
-                .onChange(of: showScratchMask) { updateMask() }
-            if showScratchMask {
+            Picker("Overlay", selection: $overlay) {
+                ForEach(Overlay.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 420)
+            .onChange(of: overlay) { _, new in
+                showScratchMask = new == .scratch
+                updateMask()
+                updateStereo()
+            }
+            switch overlay {
+            case .scratch:
                 Slider(value: $maskThreshold, in: 0.2...0.9, step: 0.05)
                     .frame(width: 160)
                     .onChange(of: maskThreshold) { updateMask() }
                 Text("≥ \(maskThreshold, format: .number.precision(.fractionLength(2)))")
                     .monospacedDigit()
+                if detector == nil {
+                    Button("Load detector") { loadDetector() }
+                }
+                Text(maskStats ?? detectorStatus)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            case .residual:
+                Slider(value: $residualThreshold, in: 0.02...0.5, step: 0.01)
+                    .frame(width: 160)
+                    .onChange(of: residualThreshold) { updateStereoImages() }
+                Text("≥ \(residualThreshold, format: .number.precision(.fractionLength(2)))")
+                    .monospacedDigit()
+                Text(stereoStatus ?? "")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            case .disparity:
+                Text(stereoStatus ?? "")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            case .none:
+                EmptyView()
             }
-            if detector == nil {
-                Button("Load detector") { loadDetector() }
-            }
-            Text(maskStats ?? detectorStatus)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
             Spacer()
         }
     }
@@ -161,13 +192,22 @@ struct RestorationEvalView: View {
                 eyePanel(title: "Original (preview)", pair: original)
                 eyePanel(
                     title: "\(style?.displayName ?? "Original") · \(tier.displayName)"
-                        + (showScratchMask && maskedPair != nil ? " · scratch mask" : ""),
-                    pair: showScratchMask ? (maskedPair ?? rendered) : rendered
+                        + (overlayPair != nil ? " · \(overlay.rawValue.lowercased())" : ""),
+                    pair: overlayPair ?? rendered
                 )
             }
             .overlay {
                 if isRendering { ProgressView().controlSize(.large) }
             }
+        }
+    }
+
+    /// The pair to show in the right-hand panel for the selected overlay.
+    private var overlayPair: (left: CGImage, right: CGImage)? {
+        switch overlay {
+        case .none: return nil
+        case .scratch: return maskedPair
+        case .disparity, .residual: return stereoPair
         }
     }
 
@@ -249,7 +289,10 @@ struct RestorationEvalView: View {
                 rendered = lookResult
                 maskedPair = nil
                 maskStats = nil
+                stereo = nil
+                stereoPair = nil
                 updateMask()
+                updateStereo()
             } catch is CancellationError {
             } catch {
                 Self.logger.error("Eval render failed: \(error.localizedDescription)")
@@ -289,6 +332,68 @@ struct RestorationEvalView: View {
                 if let stats {
                     maskStats = String(format: "left eye: %.2f%% flagged, %.2f%% excluding a 6%% border",
                                        stats.whole * 100, stats.interior * 100)
+                }
+            }
+        }
+    }
+
+    // MARK: - Stereo residual
+
+    /// Runs disparity + residual analysis on the rendered pair (once per
+    /// render), then builds the overlay images.
+    private func updateStereo() {
+        guard overlay == .disparity || overlay == .residual, let pair = rendered else { return }
+        if stereo != nil { updateStereoImages(); return }
+        stereoTask?.cancel()
+        stereoStatus = "Analyzing…"
+        stereoTask = Task.detached {
+            let clock = ContinuousClock()
+            let start = clock.now
+            let result = StereoResidual().analyze(left: pair.left, right: pair.right)
+            let elapsed = clock.now - start
+            await MainActor.run {
+                guard let result else { stereoStatus = "Stereo analysis failed"; return }
+                stereo = result
+                stereoStatus = String(
+                    format: "%dx%d analysis, shift %d px, valid L %.0f%% R %.0f%%, %.0f ms",
+                    result.width, result.height, result.globalShift,
+                    result.validFractionLeft * 100, result.validFractionRight * 100,
+                    Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
+                )
+                updateStereoImages()
+            }
+        }
+    }
+
+    private func updateStereoImages() {
+        guard let stereo, let pair = rendered else { return }
+        let mode = overlay
+        let threshold = residualThreshold
+        Task.detached {
+            let images: (CGImage, CGImage)?
+            switch mode {
+            case .disparity:
+                if let l = StereoResidual.disparityImage(stereo, left: true),
+                   let r = StereoResidual.disparityImage(stereo, left: false) { images = (l, r) } else { images = nil }
+            case .residual:
+                if let l = StereoResidual.residualOverlay(stereo, on: pair.left, left: true, threshold: threshold),
+                   let r = StereoResidual.residualOverlay(stereo, on: pair.right, left: false, threshold: threshold) {
+                    images = (l, r)
+                } else { images = nil }
+            default:
+                images = nil
+            }
+            let flaggedL = stereo.flaggedFraction(left: true, threshold: threshold) * 100
+            let flaggedR = stereo.flaggedFraction(left: false, threshold: threshold) * 100
+            await MainActor.run {
+                if let images { stereoPair = (images.0, images.1) }
+                if mode == .residual, let status = stereoStatus, !status.contains("flagged") {
+                    stereoStatus = status + String(format: " · flagged L %.2f%% R %.2f%%", flaggedL, flaggedR)
+                } else if mode == .residual, let status = stereoStatus {
+                    stereoStatus = status.replacingOccurrences(
+                        of: #" · flagged .*$"#, with: String(format: " · flagged L %.2f%% R %.2f%%", flaggedL, flaggedR),
+                        options: .regularExpression
+                    )
                 }
             }
         }

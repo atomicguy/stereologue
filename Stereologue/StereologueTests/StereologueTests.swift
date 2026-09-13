@@ -386,6 +386,65 @@ struct StereologueTests {
         #expect(cards.map(\.uuid) == requested)
     }
 
+    // MARK: - Stereo residual
+
+    /// A synthetic pair: textured left eye, right eye = left shifted 6 px,
+    /// plus a bright square planted in the left eye only. Block matching must
+    /// recover the shift, and the residual must light up the square and
+    /// almost nothing else.
+    @Test func stereoResidualRecoversShiftAndFlagsOneEyeDefect() throws {
+        let width = 320, height = 240, shift = 6
+        var seed: UInt32 = 12345
+        func noise() -> UInt8 {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            return UInt8(truncatingIfNeeded: seed >> 24)
+        }
+        // Noise blended with a gradient so every block is unique.
+        var base = [UInt8](repeating: 0, count: (width + shift) * height)
+        for i in 0..<base.count {
+            base[i] = UInt8(clamping: Int(noise()) / 2 + (i % (width + shift)) * 100 / (width + shift) + 40)
+        }
+        func image(offset: Int, square: Bool) -> CGImage? {
+            var rgba = [UInt8](repeating: 255, count: width * height * 4)
+            for y in 0..<height {
+                for x in 0..<width {
+                    var v = base[y * (width + shift) + x + offset]
+                    if square, x >= 100, x < 140, y >= 80, y < 120 { v = 250 }
+                    let b = (y * width + x) * 4
+                    rgba[b] = v; rgba[b + 1] = v; rgba[b + 2] = v
+                }
+            }
+            return Vec.rgbaImage(rgba, width: width, height: height)
+        }
+        let left = try #require(image(offset: 0, square: true))
+        // right[x] = left[x + 6], so left[x] = right[x − 6]: disparity d = −6 under left[x] ≈ right[x + d].
+        let right = try #require(image(offset: shift, square: false))
+        let expectedDisparity = -shift
+
+        let result = try #require(StereoResidual().analyze(left: left, right: right))
+        #expect(result.width == width, "small inputs are analyzed at native size")
+        #expect(result.globalShift == expectedDisparity)
+
+        var valid = 0, correct = 0
+        for i in 0..<result.disparityLeft.count where result.validLeft[i] > 0 {
+            valid += 1
+            if abs(result.disparityLeft[i] - Float(expectedDisparity)) <= 1 { correct += 1 }
+        }
+        #expect(Double(valid) / Double(width * height) > 0.6, "most pixels should pass the left-right check")
+        #expect(Double(correct) / Double(max(1, valid)) > 0.95, "valid disparities should equal the planted shift")
+
+        var inside = 0.0, insideCount = 0, outside = 0.0, outsideCount = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                let r = Double(result.residualLeft[y * width + x])
+                if x >= 104, x < 136, y >= 84, y < 116 { inside += r; insideCount += 1 }
+                else if x < 90 || x > 150 || y < 70 || y > 130 { outside += r; outsideCount += 1 }
+            }
+        }
+        #expect(inside / Double(insideCount) > 0.15, "planted square should show in the residual")
+        #expect(outside / Double(outsideCount) < 0.03, "matched texture should not")
+    }
+
     @Test func parseYearReadsLeadingFourDigits() {
         #expect(StereoCard.parseYear(from: "1871-08") == 1871)
         #expect(StereoCard.parseYear(from: "1850") == 1850)
