@@ -59,9 +59,13 @@ enum StereologueContainers {
                 throw ContainerSetupError.catalogStoreMissing
             }
             do {
-                // Remove old store if it exists
-                try? FileManager.default.removeItem(at: destinationURL)
-                
+                // Remove the old store *and* its SQLite sidecars. A leftover
+                // write-ahead log from the previous catalog would be replayed
+                // onto the freshly copied database on first open.
+                for suffix in ["", "-wal", "-shm"] {
+                    try? FileManager.default.removeItem(atPath: destinationURL.path + suffix)
+                }
+
                 // Copy new store
                 try FileManager.default.copyItem(at: bundledURL, to: destinationURL)
                 

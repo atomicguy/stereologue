@@ -215,7 +215,10 @@ nonisolated final class StereoRectificationService: @unchecked Sendable {
         rotation: CGFloat,
         to image: CGImage
     ) throws -> CGImage {
-        let ciImage = CIImage(cgImage: image)
+        // Clamp first so the strip a shift or rotation uncovers is filled
+        // with replicated edge pixels rather than left transparent — which
+        // would otherwise render as a black band in the spatial photo.
+        let ciImage = CIImage(cgImage: image).clampedToExtent()
 
         var transform = CGAffineTransform.identity
         if rotation != 0 {

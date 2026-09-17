@@ -157,10 +157,10 @@ struct CardPagerView: View {
     private func cardToolbar(for card: StereoCard) -> some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button {
-                userDataService.toggleFavorite(cardUUID: card.uuid)
-                isFavorite.toggle()
+                isFavorite = userDataService.toggleFavorite(cardUUID: card.uuid)
             } label: {
-                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                Label(isFavorite ? "Unfavorite" : "Favorite",
+                      systemImage: isFavorite ? "heart.fill" : "heart")
             }
         }
         ToolbarItem(placement: .primaryAction) {

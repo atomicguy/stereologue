@@ -46,6 +46,17 @@ final class StereologueUITests: XCTestCase {
         XCTAssertTrue(firstCard.waitForExistence(timeout: 30), app.debugDescription)
         firstCard.tap()
 
+        // Favorite it, confirm the heart reflects the persisted state, then
+        // unfavorite it again. (The toggle returns the saved state; a
+        // regression here would show as a stale or crashed heart.)
+        let favorite = app.buttons["Favorite"]
+        XCTAssertTrue(favorite.waitForExistence(timeout: 10), app.debugDescription)
+        favorite.tap()
+        let unfavorite = app.buttons["Unfavorite"]
+        XCTAssertTrue(unfavorite.waitForExistence(timeout: 5), app.debugDescription)
+        unfavorite.tap()
+        XCTAssertTrue(favorite.waitForExistence(timeout: 5), app.debugDescription)
+
         // Add it to a brand-new album.
         let addToAlbum = app.buttons["Add to Album"]
         XCTAssertTrue(addToAlbum.waitForExistence(timeout: 10), app.debugDescription)

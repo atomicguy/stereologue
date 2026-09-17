@@ -80,7 +80,7 @@ struct StereologueTests {
 
         #expect(Set([original, styled, otherStyle, fullTier, lowRes, recroppedKey]).count == 6)
         #expect(original == SpatialPhotoService.variantKey(for: base, quality: "v", style: nil, tier: .preview))
-        #expect(original.hasPrefix("abc_"), "evict(cardUUID:) relies on the uuid prefix")
+        #expect(original.hasPrefix("abc_"), "variant keys group by card uuid prefix")
     }
 
     // MARK: - Catalog paging (against the real bundled store)

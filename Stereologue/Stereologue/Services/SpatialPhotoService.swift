@@ -247,34 +247,6 @@ actor SpatialPhotoService {
         )
     }
 
-    /// Removes every cached spatial photo variant for a card (all qualities,
-    /// crops, restoration styles, and the shareable copy).
-    func evict(cardUUID: String) {
-        let prefix = "\(cardUUID)_"
-        for key in dataCacheOrder where key.hasPrefix(prefix) {
-            dataCache[key] = nil
-        }
-        dataCacheOrder.removeAll { $0.hasPrefix(prefix) }
-
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: cacheDirectory, includingPropertiesForKeys: nil
-        )) ?? []
-        for url in contents where url.lastPathComponent.hasPrefix(prefix) {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
-
-    /// Removes all cached spatial photos.
-    func evictAll() {
-        dataCache.removeAll()
-        dataCacheOrder.removeAll()
-        try? FileManager.default.removeItem(at: cacheDirectory)
-        try? FileManager.default.createDirectory(
-            at: cacheDirectory,
-            withIntermediateDirectories: true
-        )
-    }
-
     // MARK: - Private
 
     /// Called when a waiter's task is cancelled. Drops its interest in the

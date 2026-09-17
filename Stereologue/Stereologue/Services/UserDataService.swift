@@ -123,7 +123,11 @@ final class UserDataService {
         }
     }
 
-    func toggleFavorite(cardUUID: String) {
+    /// Flips the favorite state and returns the state that is actually
+    /// persisted afterwards, so a failed save doesn't leave the UI showing a
+    /// change that never happened.
+    @discardableResult
+    func toggleFavorite(cardUUID: String) -> Bool {
         do {
             let descriptor = FetchDescriptor<UserFavorite>(
                 predicate: #Predicate { $0.cardUUID == cardUUID }
@@ -145,6 +149,7 @@ final class UserDataService {
             logger.error("Failed to toggle favorite for \(cardUUID): \(error)")
             lastError = .fetchFailed("favorites", error)
         }
+        return isFavorite(cardUUID: cardUUID)
     }
 
     // MARK: - Notes
@@ -192,27 +197,26 @@ final class UserDataService {
 
     // MARK: - Crop Overrides
 
+    /// The newest override for the card. Reads never mutate the store: with
+    /// no DB-level unique constraint (unsupported under CloudKit) a sync merge
+    /// can leave duplicates, and those are reconciled by the next save.
     func cropOverride(for cardUUID: String) -> UserCropOverride? {
         do {
-            let descriptor = FetchDescriptor<UserCropOverride>(
-                predicate: #Predicate { $0.cardUUID == cardUUID },
-                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-            )
-            let matches = try userContext.fetch(descriptor)
-            // With no DB-level unique constraint (unsupported under CloudKit),
-            // a sync merge can produce duplicates. Keep the newest and drop the
-            // rest; the deletes persist on the next save.
-            if matches.count > 1 {
-                for duplicate in matches.dropFirst() {
-                    userContext.delete(duplicate)
-                }
-            }
-            return matches.first
+            return try cropOverrides(for: cardUUID).first
         } catch {
             logger.error("Failed to fetch crop override for \(cardUUID): \(error)")
             lastError = .fetchFailed("crop override", error)
             return nil
         }
+    }
+
+    /// Every override for the card, newest first.
+    private func cropOverrides(for cardUUID: String) throws -> [UserCropOverride] {
+        let descriptor = FetchDescriptor<UserCropOverride>(
+            predicate: #Predicate { $0.cardUUID == cardUUID },
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        return try userContext.fetch(descriptor)
     }
 
     func saveCropOverride(
@@ -221,10 +225,15 @@ final class UserDataService {
         rightDetection: ImageDetection
     ) {
         do {
-            if let existing = cropOverride(for: cardUUID) {
+            let matches = try cropOverrides(for: cardUUID)
+            if let existing = matches.first {
                 existing.leftDetection = leftDetection
                 existing.rightDetection = rightDetection
                 existing.updatedAt = .now
+                // Fold any sync-merge duplicates into this one write.
+                for duplicate in matches.dropFirst() {
+                    userContext.delete(duplicate)
+                }
             } else {
                 let override = UserCropOverride(
                     cardUUID: cardUUID,
@@ -245,11 +254,13 @@ final class UserDataService {
 
     func deleteCropOverride(for cardUUID: String) {
         do {
-            if let existing = cropOverride(for: cardUUID) {
-                userContext.delete(existing)
-                try saveContext()
-                logger.debug("Deleted crop override for \(cardUUID)")
+            let matches = try cropOverrides(for: cardUUID)
+            guard !matches.isEmpty else { return }
+            for override in matches {
+                userContext.delete(override)
             }
+            try saveContext()
+            logger.debug("Deleted crop override for \(cardUUID)")
         } catch let error as UserDataError {
             lastError = error
         } catch {
@@ -341,7 +352,8 @@ final class UserDataService {
     
     // MARK: - Context Management
     
-    /// Saves the user context and handles errors.
+    /// Saves the user context. On failure the pending changes are rolled
+    /// back, so the in-memory models never disagree with the store.
     private func saveContext() throws {
         do {
             if userContext.hasChanges {
@@ -349,6 +361,7 @@ final class UserDataService {
             }
         } catch {
             logger.error("Failed to save context: \(error)")
+            userContext.rollback()
             throw UserDataError.saveFailed(error)
         }
     }

@@ -8,6 +8,9 @@
 
 import Foundation
 import SwiftData
+import OSLog
+
+private let logger = Logger(subsystem: "net.atompowered.Stereologue", category: "CatalogQuery")
 
 extension ModelContext {
     /// Fetches the catalog cards for the given `uuids`, preserving their order.
@@ -21,7 +24,13 @@ extension ModelContext {
         let descriptor = FetchDescriptor<StereoCard>(
             predicate: #Predicate { uuids.contains($0.uuid) }
         )
-        let matched = (try? fetch(descriptor)) ?? []
+        let matched: [StereoCard]
+        do {
+            matched = try fetch(descriptor)
+        } catch {
+            logger.error("Catalog fetch failed (\(uuids.count) cards by uuid): \(error)")
+            return []
+        }
         let orderMap = Dictionary(uniqueKeysWithValues: uuids.enumerated().map { ($1, $0) })
         return matched.sorted { (orderMap[$0.uuid] ?? 0) < (orderMap[$1.uuid] ?? 0) }
     }

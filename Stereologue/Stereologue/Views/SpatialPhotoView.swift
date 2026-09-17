@@ -289,8 +289,7 @@ struct SpatialPhotoView: View {
 
             Button {
                 guard let uuid = viewModel.currentCardUUID else { return }
-                userDataService.toggleFavorite(cardUUID: uuid)
-                isFavorite.toggle()
+                isFavorite = userDataService.toggleFavorite(cardUUID: uuid)
             } label: {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .font(.title3)

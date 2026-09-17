@@ -256,11 +256,22 @@ struct CardDetailView: View {
             }
 
             ForEach(notes, id: \.id) { note in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(note.text)
-                    Text(note.createdAt, style: .date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(note.text)
+                        Text(note.createdAt, style: .date)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(role: .destructive) {
+                        userDataService.deleteNote(note)
+                        notes = userDataService.notes(for: card.uuid)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Delete Note")
                 }
                 .padding(.vertical, 4)
             }

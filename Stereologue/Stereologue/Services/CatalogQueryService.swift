@@ -12,6 +12,7 @@
 
 import Foundation
 import SwiftData
+import OSLog
 
 /// A browse entity that keeps a denormalized count of its related cards.
 /// Class-bound and `nonisolated` so the count can be updated through the
@@ -29,6 +30,25 @@ extension Collection: CardCountable {}
 @ModelActor
 actor CatalogQueryService {
 
+    private static let logger = Logger(
+        subsystem: "net.atompowered.Stereologue", category: "CatalogQuery"
+    )
+
+    /// Runs a fetch, returning an empty result on failure. Callers show an
+    /// empty grid either way; the log line is what distinguishes a broken
+    /// store from a query with no matches.
+    private func fetch<T: PersistentModel>(
+        _ descriptor: FetchDescriptor<T>, _ what: @autoclosure () -> String
+    ) -> [T] {
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            let label = what()
+            Self.logger.error("Catalog fetch failed (\(label, privacy: .public)): \(error)")
+            return []
+        }
+    }
+
     /// Returns every distinct `yearStart` with its card count, sorted ascending.
     ///
     /// Scans the (indexed) `yearStart` column across the whole catalog — a large
@@ -39,7 +59,7 @@ actor CatalogQueryService {
             sortBy: [SortDescriptor(\.yearStart)]
         )
         descriptor.propertiesToFetch = [\.yearStart]
-        let years = (try? modelContext.fetch(descriptor))?.compactMap(\.yearStart) ?? []
+        let years = fetch(descriptor, "year counts").compactMap(\.yearStart)
 
         let byYear = Dictionary(grouping: years) { $0 }
         return byYear.keys.sorted().map { YearGroup(year: $0, count: byYear[$0]!.count) }
@@ -61,8 +81,7 @@ actor CatalogQueryService {
         var descriptor = FetchDescriptor<StereoCard>(predicate: predicate, sortBy: sortBy)
         descriptor.fetchOffset = offset
         descriptor.fetchLimit = limit
-        let cards = (try? modelContext.fetch(descriptor)) ?? []
-        return cards.map(CardRow.init)
+        return fetch(descriptor, "rows at offset \(offset)").map(CardRow.init)
     }
 
     /// Returns rows for the given UUIDs, in the same order as `uuids`, so
@@ -73,7 +92,7 @@ actor CatalogQueryService {
         let descriptor = FetchDescriptor<StereoCard>(
             predicate: #Predicate { uuids.contains($0.uuid) }
         )
-        let matched = (try? modelContext.fetch(descriptor)) ?? []
+        let matched = fetch(descriptor, "\(uuids.count) rows by uuid")
         let byUUID = Dictionary(matched.map { ($0.uuid, CardRow($0)) }, uniquingKeysWith: { a, _ in a })
         return uuids.compactMap { byUUID[$0] }
     }
@@ -87,8 +106,7 @@ actor CatalogQueryService {
     ) -> [URL] {
         var descriptor = FetchDescriptor<StereoCard>(predicate: predicate)
         descriptor.fetchLimit = limit
-        let cards = (try? modelContext.fetch(descriptor)) ?? []
-        return cards.compactMap { $0.frontImageURL(quality: quality) }
+        return fetch(descriptor, "preview images").compactMap { $0.frontImageURL(quality: quality) }
     }
 
     /// Populates the denormalized `cardCount` on every browse entity. Intended
