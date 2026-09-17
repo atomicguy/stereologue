@@ -8,7 +8,7 @@
 //
 
 import SwiftUI
-import NukeUI
+import Nuke
 
 struct CropEditorView: View {
     let card: StereoCard
@@ -63,6 +63,24 @@ struct CropEditorView: View {
         #endif
     }
 
+    /// Loading and failed states shared by both editors.
+    @ViewBuilder
+    private func loadPlaceholder(_ phase: ImageLoadPhase) -> some View {
+        switch phase {
+        case .loading:
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed(let reload):
+            ContentUnavailableView {
+                Label("Failed to Load", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text("Could not load the card image.")
+            } actions: {
+                Button("Try Again", action: reload)
+            }
+        }
+    }
+
     // MARK: - Drag-based editor (iPadOS / macOS)
 
     #if !os(visionOS)
@@ -85,19 +103,10 @@ struct CropEditorView: View {
 
     @ViewBuilder
     private func dragEditorContent(url: URL, containerSize: CGSize) -> some View {
-        LazyImage(url: url) { state in
-            if let image = state.image {
-                dragImageLayer(image: image, containerSize: containerSize)
-            } else if state.error != nil {
-                ContentUnavailableView(
-                    "Failed to Load",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text("Could not load the card image.")
-                )
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+        ReloadableImage(request: ImageRequest(url: url)) { image in
+            dragImageLayer(image: image, containerSize: containerSize)
+        } placeholder: { phase in
+            loadPlaceholder(phase)
         }
     }
 
@@ -179,19 +188,10 @@ struct CropEditorView: View {
     private var sliderImagePreview: some View {
         GeometryReader { geo in
             if let url = card.frontImageURL(quality: "q") {
-                LazyImage(url: url) { state in
-                    if let image = state.image {
-                        sliderPreviewLayer(image: image, containerSize: geo.size)
-                    } else if state.error != nil {
-                        ContentUnavailableView(
-                            "Failed to Load",
-                            systemImage: "exclamationmark.triangle",
-                            description: Text("Could not load the card image.")
-                        )
-                    } else {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                ReloadableImage(request: ImageRequest(url: url)) { image in
+                    sliderPreviewLayer(image: image, containerSize: geo.size)
+                } placeholder: { phase in
+                    loadPlaceholder(phase)
                 }
             }
         }

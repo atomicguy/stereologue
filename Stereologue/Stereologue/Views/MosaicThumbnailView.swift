@@ -8,7 +8,6 @@
 import SwiftUI
 import SwiftData
 import Nuke
-import NukeUI
 
 /// One cell of a thumbnail mosaic. Reports load completion (success *or*
 /// failure) via `onResolved` so the enclosing mosaic can show a loading
@@ -19,20 +18,23 @@ private struct MosaicCell: View {
 
     var body: some View {
         if let url {
-            LazyImage(request: BrowseMosaicItem.thumbnailRequest(for: url)) { state in
-                if let image = state.image {
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    Color(.systemFill)
-                }
+            ReloadableImage(
+                request: BrowseMosaicItem.thumbnailRequest(for: url),
+                onCompletion: { _ in onResolved() }
+            ) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: { phase in
+                Color.placeholderFill
+                    .overlay {
+                        if case .failed(let reload) = phase {
+                            ImageReloadButton(showsLabel: false, action: reload)
+                        }
+                    }
             }
-            .priority(.normal)
-            .onCompletion { _ in onResolved() }
-            .transition(.opacity)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
         } else {
-            Color(.systemFill)
+            Color.placeholderFill
         }
     }
 }

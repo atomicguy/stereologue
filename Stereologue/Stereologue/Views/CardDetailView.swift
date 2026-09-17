@@ -7,7 +7,7 @@
 //
 
 import SwiftUI
-import NukeUI
+import Nuke
 
 struct CardDetailView: View {
     let card: StereoCard
@@ -87,17 +87,12 @@ struct CardDetailView: View {
     @ViewBuilder
     private var frontImageSection: some View {
         if let url = card.frontImageURL(quality: "q") {
-            LazyImage(url: url) { state in
-                if let image = state.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else if state.error != nil {
-                    imagePlaceholder
-                } else {
-                    imagePlaceholder
-                        .overlay { ProgressView() }
-                }
+            ReloadableImage(request: ImageRequest(url: url)) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } placeholder: { phase in
+                imagePlaceholder(phase)
             }
             .overlay {
                 if showDetections {
@@ -187,17 +182,12 @@ struct CardDetailView: View {
                 .font(.headline)
                 .padding(.horizontal)
 
-            LazyImage(url: url) { state in
-                if let image = state.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else if state.error != nil {
-                    imagePlaceholder
-                } else {
-                    imagePlaceholder
-                        .overlay { ProgressView() }
-                }
+            ReloadableImage(request: ImageRequest(url: url)) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } placeholder: { phase in
+                imagePlaceholder(phase)
             }
             .backgroundExtensionEffect()
         }
@@ -299,14 +289,17 @@ struct CardDetailView: View {
 
     // MARK: - Placeholder
 
-    private var imagePlaceholder: some View {
+    private func imagePlaceholder(_ phase: ImageLoadPhase) -> some View {
         Rectangle()
-            .fill(.quaternary)
+            .fill(.placeholderFill)
             .aspectRatio(1.6, contentMode: .fit)
             .overlay {
-                Image(systemName: "photo")
-                    .font(.largeTitle)
-                    .foregroundStyle(.tertiary)
+                switch phase {
+                case .loading:
+                    ProgressView()
+                case .failed(let reload):
+                    ImageReloadButton(action: reload)
+                }
             }
     }
 }

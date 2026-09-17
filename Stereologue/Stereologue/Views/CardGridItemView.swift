@@ -7,7 +7,6 @@
 
 import SwiftUI
 import Nuke
-import NukeUI
 
 struct CardGridItemView: View {
     let row: CardRow
@@ -47,24 +46,21 @@ struct CardGridItemView: View {
             #endif
     }
 
-    @ViewBuilder
     private var imageContent: some View {
-        if let request = Self.thumbnailRequest(for: row) {
-            LazyImage(request: request) { state in
-                if let image = state.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else if state.error != nil {
-                    placeholderContent
-                } else {
-                    placeholderContent
-                }
-            }
-            .priority(.normal)
-            .transition(.opacity)
-        } else {
+        ReloadableImage(request: Self.thumbnailRequest(for: row)) { image in
+            image
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } placeholder: { phase in
             placeholderContent
+                .overlay {
+                    if case .failed(let reload) = phase {
+                        // Lifted so the badge sits in the image area, clear
+                        // of the title bar drawn along the bottom edge.
+                        ImageReloadButton(action: reload)
+                            .padding(.bottom, 36)
+                    }
+                }
         }
     }
 
@@ -80,7 +76,7 @@ struct CardGridItemView: View {
 
     private var placeholderContent: some View {
         Rectangle()
-            .fill(.quaternary)
+            .fill(.placeholderFill)
             .overlay {
                 Image(systemName: "photo")
                     .font(.title2)
