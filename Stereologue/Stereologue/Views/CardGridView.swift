@@ -16,6 +16,9 @@ struct CardGridView: View {
     /// Called as the user nears the end of the grid, so a paged caller can load
     /// the next page. `nil` when every row is already present.
     let onReachEnd: (() -> Void)?
+    /// A destructive action offered in each cell's context menu (for example
+    /// "Remove from Album"). `nil` for grids whose membership isn't editable.
+    let removeAction: CardGridRemoveAction?
 
     @Environment(CardListContext.self) private var cardListContext
     // Prefetch into the memory cache (the default) so cells appear instantly:
@@ -34,13 +37,15 @@ struct CardGridView: View {
         emptyTitle: String = "No Cards",
         emptySystemImage: String = "photo.on.rectangle.angled",
         emptyDescription: String = "No cards to display.",
-        onReachEnd: (() -> Void)? = nil
+        onReachEnd: (() -> Void)? = nil,
+        removeAction: CardGridRemoveAction? = nil
     ) {
         self.rows = rows
         self.emptyTitle = emptyTitle
         self.emptySystemImage = emptySystemImage
         self.emptyDescription = emptyDescription
         self.onReachEnd = onReachEnd
+        self.removeAction = removeAction
     }
 
     var body: some View {
@@ -62,6 +67,15 @@ struct CardGridView: View {
                                     .onAppear { onCardAppear(at: index) }
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                if let removeAction {
+                                    Button(role: .destructive) {
+                                        removeAction.perform(row)
+                                    } label: {
+                                        Label(removeAction.title, systemImage: removeAction.systemImage)
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal)
@@ -89,6 +103,13 @@ struct CardGridView: View {
             onReachEnd()
         }
     }
+}
+
+/// A destructive per-card action a grid can offer in its context menu.
+struct CardGridRemoveAction {
+    let title: String
+    let systemImage: String
+    let perform: (CardRow) -> Void
 }
 
 #if DEBUG

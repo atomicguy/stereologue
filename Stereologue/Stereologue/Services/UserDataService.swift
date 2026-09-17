@@ -277,6 +277,55 @@ final class UserDataService {
         return album
     }
 
+    func renameAlbum(_ album: UserAlbum, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != album.name else { return }
+        album.name = trimmed
+        album.updatedAt = .now
+        do {
+            try saveContext()
+            logger.debug("Renamed album to \(trimmed)")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to rename album: \(error)")
+            lastError = .saveFailed(error)
+        }
+    }
+
+    func addCard(uuid: String, to album: UserAlbum) {
+        guard !album.containsCard(uuid: uuid) else { return }
+        album.addCard(uuid: uuid)
+        do {
+            try saveContext()
+            logger.debug("Added \(uuid) to album \(album.name)")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to add card to album: \(error)")
+            lastError = .saveFailed(error)
+        }
+    }
+
+    func removeCard(uuid: String, from album: UserAlbum) {
+        guard album.containsCard(uuid: uuid) else { return }
+        // Delete the entries explicitly: dropping them from the relationship
+        // alone would leave orphaned `UserAlbumEntry` rows behind.
+        for entry in album.entries where entry.cardUUID == uuid {
+            userContext.delete(entry)
+        }
+        album.removeCard(uuid: uuid)
+        do {
+            try saveContext()
+            logger.debug("Removed \(uuid) from album \(album.name)")
+        } catch let error as UserDataError {
+            lastError = error
+        } catch {
+            logger.error("Failed to remove card from album: \(error)")
+            lastError = .saveFailed(error)
+        }
+    }
+
     func deleteAlbum(_ album: UserAlbum) {
         do {
             userContext.delete(album)

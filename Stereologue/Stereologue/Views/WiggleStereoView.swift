@@ -348,7 +348,7 @@ struct WiggleStereoView: View {
             loadingMessage = "Loading stereo pair…"
             try await load(RenderVariant(style: nil, tier: .preview), service: service)
         } catch {
-            self.error = String(describing: error)
+            self.error = error.localizedDescription
         }
         isLoading = false
     }

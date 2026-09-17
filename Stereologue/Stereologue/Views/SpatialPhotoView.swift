@@ -88,7 +88,7 @@ struct SpatialPhotoView: View {
                 dismiss()
             }
         }
-        .alert("Restoration Failed", isPresented: .init(
+        .alert("Couldn't Load Photo", isPresented: .init(
             get: { loadError != nil },
             set: { if !$0 { loadError = nil } }
         )) {

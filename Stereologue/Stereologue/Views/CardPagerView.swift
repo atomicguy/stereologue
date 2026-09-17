@@ -42,6 +42,8 @@ struct CardPagerView: View {
     @State private var shareItem: URL?
     @State private var isGeneratingShare = false
     @State private var shareError: String?
+    @State private var showNewAlbum = false
+    @State private var newAlbumName = ""
     #if os(visionOS)
     @Environment(SpatialPhotoViewModel.self) private var spatialPhotoViewModel
     @Environment(\.pushWindow) private var pushWindow
@@ -116,6 +118,16 @@ struct CardPagerView: View {
             } message: {
                 Text(shareError ?? "")
             }
+            .alert("New Album", isPresented: $showNewAlbum) {
+                TextField("Album name", text: $newAlbumName)
+                Button("Create") {
+                    guard let uuid = currentCardUUID else { return }
+                    let name = newAlbumName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let album = userDataService.createAlbum(name: name.isEmpty ? "New Album" : name)
+                    userDataService.addCard(uuid: uuid, to: album)
+                }
+                Button("Cancel", role: .cancel) {}
+            }
     }
 
     // MARK: - Card Pager Content
@@ -150,6 +162,9 @@ struct CardPagerView: View {
             } label: {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
             }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            albumMenu(for: card)
         }
         if card.hasStereoDetections {
             ToolbarItem(placement: .primaryAction) {
@@ -189,6 +204,36 @@ struct CardPagerView: View {
             .disabled(!card.hasStereoDetections)
         }
         #endif
+    }
+
+    // MARK: - Albums
+
+    /// Toggles the card's membership in each album, and offers to start a new
+    /// album containing it.
+    private func albumMenu(for card: StereoCard) -> some View {
+        Menu {
+            ForEach(userDataService.albums, id: \.id) { album in
+                Toggle(album.name, isOn: Binding(
+                    get: { album.containsCard(uuid: card.uuid) },
+                    set: { include in
+                        if include {
+                            userDataService.addCard(uuid: card.uuid, to: album)
+                        } else {
+                            userDataService.removeCard(uuid: card.uuid, from: album)
+                        }
+                    }
+                ))
+            }
+            if !userDataService.albums.isEmpty {
+                Divider()
+            }
+            Button("New Album…", systemImage: "plus") {
+                newAlbumName = ""
+                showNewAlbum = true
+            }
+        } label: {
+            Label("Add to Album", systemImage: "rectangle.stack.badge.plus")
+        }
     }
 
     // MARK: - Sharing

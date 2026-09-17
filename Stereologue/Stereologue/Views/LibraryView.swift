@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Nuke
 
 struct LibraryView: View {
     @State private var searchText = ""
@@ -22,6 +23,15 @@ struct LibraryView: View {
         LibraryGrid(searchText: debouncedSearchText)
             .navigationTitle("Stereologue")
             .searchable(text: $searchText, prompt: "Cards, subjects, creators…")
+            .toolbar {
+                ToolbarItem(placement: .secondaryAction) {
+                    // Recovery for a stuck image: drops every cached download so
+                    // the next request goes back to the server.
+                    Button("Clear Image Cache", systemImage: "arrow.clockwise.circle") {
+                        ImagePipeline.clearStereologueCaches()
+                    }
+                }
+            }
             #if DEBUG
             .toolbar {
                 ToolbarItem(placement: .secondaryAction) {

@@ -16,6 +16,8 @@ struct ContentView: View {
 
     @State private var selectedTab: AppTab = .library
     @State private var cardListContext = CardListContext()
+    @State private var showNewAlbum = false
+    @State private var newAlbumName = ""
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -92,7 +94,8 @@ struct ContentView: View {
             .defaultVisibility(.hidden, for: .tabBar)
             .sectionActions {
                 Button("New Album", systemImage: "plus") {
-                    _ = userDataService.createAlbum(name: "New Album")
+                    newAlbumName = ""
+                    showNewAlbum = true
                 }
             }
 
@@ -104,6 +107,22 @@ struct ContentView: View {
         .fontDesign(.serif)
         .environment(cardListContext)
         .userDataErrorAlert()
+        .alert("New Album", isPresented: $showNewAlbum) {
+            TextField("Album name", text: $newAlbumName)
+            Button("Create") {
+                let name = newAlbumName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let album = userDataService.createAlbum(name: name.isEmpty ? "New Album" : name)
+                selectedTab = .album(album.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        // A deleted album's tab disappears; don't leave the selection pointing
+        // at it.
+        .onChange(of: userDataService.albums.map(\.id)) { _, ids in
+            if case .album(let id) = selectedTab, !ids.contains(id) {
+                selectedTab = .library
+            }
+        }
     }
 }
 

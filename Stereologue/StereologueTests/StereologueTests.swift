@@ -11,6 +11,7 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import SwiftData
+import Nuke
 @testable import Stereologue
 
 struct StereologueTests {
@@ -477,6 +478,40 @@ struct StereologueTests {
             provider: provider,
             decode: nil, shouldInterpolate: true, intent: .defaultIntent
         )
+    }
+
+    // MARK: - Image pipeline
+
+    @Test func diskCacheOnlyAcceptsImageBytes() throws {
+        let image = try #require(Self.makeTestImage(width: 8, height: 8))
+        let jpeg = try Self.encoded(image, as: .jpeg)
+        let png = try Self.encoded(image, as: .png)
+        #expect(ImageSignature.matches(jpeg))
+        #expect(ImageSignature.matches(png))
+        // What a misbehaving image server hands back with a 200.
+        #expect(!ImageSignature.matches(Data("<html><body>Not Found</body></html>".utf8)))
+        #expect(!ImageSignature.matches(Data("404 Not Found\n".utf8)))
+        #expect(!ImageSignature.matches(Data()))
+    }
+
+    @Test func loaderRetriesOnlyUnansweredOrTransientFailures() {
+        #expect(RetryingDataLoader.isRetryable(URLError(.timedOut)))
+        #expect(RetryingDataLoader.isRetryable(URLError(.networkConnectionLost)))
+        #expect(RetryingDataLoader.isRetryable(DataLoader.Error.statusCodeUnacceptable(503)))
+        #expect(RetryingDataLoader.isRetryable(DataLoader.Error.statusCodeUnacceptable(429)))
+        #expect(!RetryingDataLoader.isRetryable(URLError(.cancelled)))
+        #expect(!RetryingDataLoader.isRetryable(DataLoader.Error.statusCodeUnacceptable(404)))
+        #expect(!RetryingDataLoader.isRetryable(CancellationError()))
+    }
+
+    private static func encoded(_ image: CGImage, as type: UTType) throws -> Data {
+        let data = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(
+            data as CFMutableData, type.identifier as CFString, 1, nil
+        ))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return data as Data
     }
 
     private static func isUniform(_ image: CGImage) -> Bool {
